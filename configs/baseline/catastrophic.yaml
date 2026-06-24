@@ -1,0 +1,56 @@
+method: catastrophic
+seed: 0
+run_name: null
+
+data:
+  dataset_name: mnist
+  data_root: data/mnist
+  input_size: 28
+  input_channels: 1
+  num_classes: 10
+  normalize: false
+
+tasks:
+  task_names:
+    - task1_digits_0_to_4
+    - task2_digits_5_to_9
+  task_splits:
+    - [0, 1, 2, 3, 4]
+    - [5, 6, 7, 8, 9]
+  task_order:
+    - 0
+    - 1
+
+model:
+  input_size: 28
+  input_channels: 1
+  conv_kernel_size: 5
+  s1_maps: 30
+  s2_maps: 250
+  s3_neurons: 200
+  num_classes: 10
+  neurons_per_class: 20
+  pool_kernel_sizes: [2, 2, 2]
+  pool_strides: [2, 2, 2]
+  inhibition_radii: [0, 0, 0]
+  weight_mean: 0.8
+  weight_std: 0.05
+
+train:
+  batch_size: 64
+  num_epochs_task1: 2
+  num_epochs_task2: 2
+  learning_rule: rstdp
+  learning_rate: 0.01
+  reward_scale: 1.0
+  punish_scale: 0.5
+  shuffle: true
+
+eval:
+  batch_size: 64
+  measure_forgetting: true
+  save_intermediate_metrics: true
+
+output:
+  root_dir: experiments
+  summary_csv: results/baseline_summary.csv
