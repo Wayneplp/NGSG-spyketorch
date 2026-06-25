@@ -27,6 +27,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from src.trainers import TRAINER_REGISTRY
 
 
@@ -73,6 +77,12 @@ def parse_args() -> argparse.Namespace:
         "--run-name",
         default=None,
         help="Optional run name override. Default is inferred from config + timestamp.",
+    )
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cpu", "cuda"),
+        default=None,
+        help="Optional device override. Replaces train.device if provided.",
     )
     parser.add_argument(
         "--dry-run",
@@ -134,6 +144,7 @@ def normalize_config(
     config_path: Path,
     cli_seed: Optional[int],
     cli_run_name: Optional[str],
+    cli_device: Optional[str],
 ) -> Dict[str, Any]:
     normalized = deepcopy(config)
     ensure_required_sections(normalized)
@@ -147,6 +158,11 @@ def normalize_config(
     if cli_seed is not None:
         normalized["seed"] = cli_seed
     normalized.setdefault("seed", 0)
+
+    train = normalized.setdefault("train", {})
+    if cli_device is not None:
+        train["device"] = cli_device
+    train.setdefault("device", "auto")
 
     output = normalized.setdefault("output", {})
     output.setdefault("root_dir", "experiments")
@@ -324,7 +340,13 @@ def main() -> int:
 
     try:
         raw_config = load_config(config_path)
-        config = normalize_config(raw_config, config_path, args.seed, args.run_name)
+        config = normalize_config(
+            raw_config,
+            config_path,
+            args.seed,
+            args.run_name,
+            args.device,
+        )
         output_paths = resolve_output_paths(config, project_root)
         make_dirs(
             [
