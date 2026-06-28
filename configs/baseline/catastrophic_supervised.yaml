@@ -1,0 +1,50 @@
+﻿method: catastrophic
+seed: 0
+run_name: null
+
+data:
+  dataset_name: mnist
+  data_root: data/mnist
+  input_size: 28
+  input_channels: 1
+  num_classes: 10
+  normalize: true
+
+tasks:
+  task_names:
+    - task1_digits_0_to_4
+    - task2_digits_5_to_9
+  task_splits:
+    - [0, 1, 2, 3, 4]
+    - [5, 6, 7, 8, 9]
+  task_order:
+    - 0
+    - 1
+
+model:
+  architecture: supervised_mlp
+  input_size: 28
+  input_channels: 1
+  num_classes: 10
+  hidden_units: 256
+  dropout: 0.0
+
+train:
+  batch_size: 128
+  num_epochs_task1: 3
+  num_epochs_task2: 3
+  learning_rule: backprop
+  optimizer: sgd
+  learning_rate: 0.05
+  momentum: 0.9
+  weight_decay: 0.0
+  shuffle: true
+
+eval:
+  batch_size: 256
+  measure_forgetting: true
+  save_intermediate_metrics: true
+
+output:
+  root_dir: experiments
+  summary_csv: results/baseline_summary.csv
