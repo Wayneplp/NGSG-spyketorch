@@ -1,0 +1,30 @@
+# Python cache and local environments
+__pycache__/
+*.py[cod]
+*.so
+.Python
+.venv/
+venv/
+env/
+
+# Notebook and editor clutter
+.ipynb_checkpoints/
+.DS_Store
+.vscode/
+.idea/
+
+# Experiment artifacts generated locally
+logs/
+checkpoints/
+results/
+experiments/*/
+
+# Large local bundles not needed for reproduction
+SKILL/
+SKILL.zip
+
+# Keep placeholder files if we add them later
+!experiments/.gitkeep
+!logs/.gitkeep
+!checkpoints/.gitkeep
+!results/.gitkeep
