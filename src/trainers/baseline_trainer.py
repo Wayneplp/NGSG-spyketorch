@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import import_module
@@ -56,7 +56,7 @@ class BaselineTrainer:
 
         task1, task2 = task_bundles[0], task_bundles[1]
         model = self.build_model(config).to(device)
-        rstdp = self.build_output_rstdp(model, config)
+        rstdp = self.build_output_rstdp(model, config).to(device)
 
         train_task1_loader = self.build_train_loader(task1.train_dataset, config)
         test_task1_loader = self.build_eval_loader(task1.test_dataset, config)
@@ -191,7 +191,7 @@ class BaselineTrainer:
 
         stats: Dict[str, Any] = {
             "stage": stage_name,
-            "learning_rule": "official_spyketorch_stdp_rstdp",
+            "learning_rule": "official_spyketorch_stdp_anti_stdp",
             "feature_training": {},
         }
 
@@ -260,6 +260,9 @@ class BaselineTrainer:
     ) -> Dict[str, Any]:
         num_classes = int(config["model"]["num_classes"])
         neurons_per_class = int(config["model"]["neurons_per_class"])
+        train_cfg = config.get("train", {})
+        kwta = int(train_cfg.get("rstdp_kwta", train_cfg.get("s3_kwta", 1)))
+        radius = int(train_cfg.get("s3_inhibition_radius", 0))
         history = []
         for epoch_idx in range(epochs):
             samples = 0
@@ -275,6 +278,8 @@ class BaselineTrainer:
                     target=int(target.item()),
                     num_classes=num_classes,
                     neurons_per_class=neurons_per_class,
+                    kwta=kwta,
+                    inhibition_radius=radius,
                 )
                 samples += 1
                 correct += int(update_stats["prediction"] == int(target.item()))
@@ -289,7 +294,7 @@ class BaselineTrainer:
                     "punish_updates": punish_updates,
                 }
             )
-        return {"stage": "s3", "epochs": epochs, "learning_rule": "spyketorch_rstdp", "history": history}
+        return {"stage": "s3", "epochs": epochs, "learning_rule": "spyketorch_stdp_anti_stdp", "history": history}
 
     def iter_samples(self, dataloader: Any, device: torch.device):
         for batch in dataloader:
@@ -340,7 +345,8 @@ class BaselineTrainer:
         return (
             "Official SpykeTorch-based baseline: S1/S2 use SpykeTorch snn.STDP, "
             "S1/S2/S3 layers are SpykeTorch snn.Convolution/Pooling modules, and S3 "
-            "uses a reward-modulated update on SpykeTorch convolution weights."
+            "uses the SpykeTorch tutorial-style rule: official snn.STDP for correct "
+            "winners and official snn.STDP anti-STDP for wrong winners."
         )
 
     def _try_describe_tasks(self, config: Mapping[str, Any]) -> Sequence[Dict[str, Any]]:
@@ -392,4 +398,8 @@ TRAINER_REGISTRY = {
     "frozen_large_weights": FrozenLargeWeightsTrainer,
     "langevin": LangevinTrainer,
 }
+
+
+
+
 

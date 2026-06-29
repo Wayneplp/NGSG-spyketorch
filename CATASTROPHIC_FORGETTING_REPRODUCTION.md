@@ -1,6 +1,8 @@
-# 灾难性遗忘复现状态记录
+﻿# 灾难性遗忘复现状态记录
 
 最后更新：2026-06-29
+
+本次补充：S3 R-STDP 已按 SpykeTorch tutorial 改为官方 snn.STDP + nti_stdp 两分支。
 
 ## 当前结论
 
@@ -27,12 +29,12 @@
 
 论文协议：
 
-1. 先训练 MNIST 数字任务。
-2. 假设 MNIST 旧数据不可再用。
-3. 再用同一个网络训练 EMNIST 字母任务。
-4. 后续训练中 S1 和 S2 分别用 STDP 训练 2 和 4 个 epoch。
-5. S3 用 R-STDP 训练 100 个 epoch。
-6. 表格脚注说明初始 MNIST 训练使用了 600 个 epoch。
+1. 先训练 MNIST 数字任务。  
+2. 假设 MNIST 旧数据不可再用。  
+3. 再用同一个网络训练 EMNIST 字母任务。  
+4. 后续训练中 S1 和 S2 分别用 STDP 训练 2 和 4 个 epoch。  
+5. S3 用 R-STDP 训练 100 个 epoch。  
+6. 表格脚注说明初始 MNIST 训练使用了 600 个 epoch。  
 
 协议核对来源：论文 arXiv 页面/PDF：`https://arxiv.org/abs/2111.09553`。
 
@@ -121,14 +123,19 @@ stdp.to(device)
 
 文件：`src/plasticity/rstdp.py`
 
-官方 SpykeTorch 包中没有现成的 reward-modulated STDP 类，因此当前 S3 使用的是：
+已按 SpykeTorch 官方 `tutorial.ipynb` 的 reinforcement learning 写法改为 `STDP + anti-STDP`：
 
-- S3 层本身：`SpykeTorch.snn.Convolution`
-- spike/potential 表示：SpykeTorch 网络产生的 spike-wave 和 potentials
-- 更新器：仓库内 `SpykeTorchRewardSTDP`
+```python
+stdp = snn.STDP(conv_layer=s3, learning_rate=(a_plus, a_minus))
+anti_stdp = snn.STDP(conv_layer=s3, learning_rate=(-a_plus, anti_a_minus))
+```
 
-这不是旧的 dense tensor 近似模型；它是在官方 SpykeTorch S3 卷积权重上做 reward/punishment 更新。
+训练时先用 `SpykeTorch.functional.get_k_winners(...)` 选择 S3 winner，再用 `winner_feature // neurons_per_class` 得到预测类别：
 
+- 如果预测正确：调用官方 `stdp(...)`。
+- 如果预测错误：调用官方 `anti_stdp(...)`。
+
+因此当前 S3 不再是仓库内手写 delta 公式；它是 tutorial 风格的 reward-modulated STDP，底层两条分支都调用官方 `SpykeTorch.snn.STDP`。
 ## 近似实现隔离
 
 旧近似实现已经移动到：
@@ -224,16 +231,13 @@ C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config c
 
 ## 当前仍需注意的问题
 
-虽然主路径已经切换到官方 SpykeTorch，但仍有一个关键差距：官方包本身没有现成 R-STDP 类。因此 S3 的 reward-modulated 更新仍然是本仓库实现，但它操作的是官方 SpykeTorch 的 `snn.Convolution` 权重和 spike-wave，不再是之前的 dense-tensor 近似网络。
+S3 R-STDP 已经改成 SpykeTorch tutorial 的 `stdp + anti_stdp` 形式。后续重点不再是“是否使用官方 STDP”，而是复现实验细节是否足够接近论文：
 
-下一步要想更贴近论文，需要继续做：
-
-1. 对照论文或原作者代码确认 S3 R-STDP 的精确公式和更新时机。
+1. 继续核对论文与作者代码中的阈值、学习率和 winner/class 映射。
 2. 增加中等规模实验，先确认 MNIST 初训能高于随机水平。
-3. 调整 firing threshold、STDP 学习率和 R-STDP 奖惩参数。
+3. 调整 firing threshold、STDP 学习率和 anti-STDP 奖惩参数。
 4. 加每个 epoch 的 eval snapshot，观察学习曲线。
-5. 如果需要更严格复现，继续寻找论文原始实验脚本，而不仅仅使用 SpykeTorch 基础包。
-
+5. 完整跑 600/100 epoch 前，先用小规模和中等规模配置确认训练曲线方向正确。
 ## 如何运行
 
 ### 快速验证官方 SpykeTorch 路线
@@ -249,3 +253,4 @@ C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config c
 ```
 
 完整配置非常耗时，建议先跑中等规模配置再跑完整 600/100 epoch。
+

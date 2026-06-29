@@ -1,10 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict
 
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 
 from SpykeTorch import functional as sf
 from SpykeTorch import snn
@@ -23,12 +23,33 @@ class SpykeTorchRSTDPConfig:
     use_stabilizer: bool = True
 
 
-class SpykeTorchRewardSTDP:
-    """Reward-modulated output update operating on SpykeTorch snn.Convolution."""
+class SpykeTorchRewardSTDP(nn.Module):
+    """Tutorial-style R-STDP: official SpykeTorch STDP plus anti-STDP."""
 
     def __init__(self, conv_layer: snn.Convolution, config: SpykeTorchRSTDPConfig) -> None:
+        super().__init__()
         self.conv_layer = conv_layer
         self.config = config
+        self.stdp = snn.STDP(
+            conv_layer=conv_layer,
+            learning_rate=(
+                config.reward_active * config.reward_scale,
+                config.reward_inactive * config.reward_scale,
+            ),
+            use_stabilizer=config.use_stabilizer,
+            lower_bound=config.lower_bound,
+            upper_bound=config.upper_bound,
+        )
+        self.anti_stdp = snn.STDP(
+            conv_layer=conv_layer,
+            learning_rate=(
+                config.punish_active * config.punish_scale,
+                config.punish_inactive * config.punish_scale,
+            ),
+            use_stabilizer=config.use_stabilizer,
+            lower_bound=config.lower_bound,
+            upper_bound=config.upper_bound,
+        )
 
     @torch.no_grad()
     def update(
@@ -39,57 +60,44 @@ class SpykeTorchRewardSTDP:
         target: int,
         num_classes: int,
         neurons_per_class: int,
+        kwta: int = 1,
+        inhibition_radius: int = 0,
     ) -> Dict[str, Any]:
-        scores = potentials.view(potentials.shape[0], num_classes, neurons_per_class, -1).amax(dim=(0, 2, 3))
-        predicted = int(scores.argmax().item())
+        winners = sf.get_k_winners(
+            potentials,
+            kwta=kwta,
+            inhibition_radius=inhibition_radius,
+            spikes=output_spikes,
+        )
+        if len(winners) == 0:
+            return {
+                "prediction": self._fallback_prediction(potentials, num_classes, neurons_per_class),
+                "reward_updates": 0,
+                "punish_updates": 0,
+                "winner_count": 0,
+            }
+
         target = int(target)
+        predicted = int(winners[0][0] // neurons_per_class)
         correct = predicted == target
 
         if correct:
-            group_start = target * neurons_per_class
-            group_potentials = potentials[:, group_start : group_start + neurons_per_class]
-            winner_offset = self._winner_offset(group_potentials)
-            neuron_idx = group_start + winner_offset
-            self._apply_delta(
-                neuron_idx=neuron_idx,
-                input_spikes=input_spikes,
-                active_delta=self.config.reward_active * self.config.reward_scale,
-                inactive_delta=self.config.reward_inactive * self.config.reward_scale,
-            )
-            return {"prediction": predicted, "reward_updates": 1, "punish_updates": 0}
+            self.stdp(input_spikes, potentials, output_spikes, winners=winners)
+            return {
+                "prediction": predicted,
+                "reward_updates": 1,
+                "punish_updates": 0,
+                "winner_count": len(winners),
+            }
 
-        group_start = predicted * neurons_per_class
-        group_potentials = potentials[:, group_start : group_start + neurons_per_class]
-        winner_offset = self._winner_offset(group_potentials)
-        neuron_idx = group_start + winner_offset
-        self._apply_delta(
-            neuron_idx=neuron_idx,
-            input_spikes=input_spikes,
-            active_delta=self.config.punish_active * self.config.punish_scale,
-            inactive_delta=self.config.punish_inactive * self.config.punish_scale,
-        )
-        return {"prediction": predicted, "reward_updates": 0, "punish_updates": 1}
+        self.anti_stdp(input_spikes, potentials, output_spikes, winners=winners)
+        return {
+            "prediction": predicted,
+            "reward_updates": 0,
+            "punish_updates": 1,
+            "winner_count": len(winners),
+        }
 
-    def _winner_offset(self, group_potentials: Tensor) -> int:
-        flat_idx = int(group_potentials.reshape(-1).argmax().item())
-        per_neuron = group_potentials.shape[0] * group_potentials.shape[2] * group_potentials.shape[3]
-        return flat_idx // per_neuron
-
-    def _apply_delta(
-        self,
-        neuron_idx: int,
-        input_spikes: Tensor,
-        active_delta: float,
-        inactive_delta: float,
-    ) -> None:
-        pre_spiked = input_spikes.sum(dim=0).sign().bool()
-        row = self.conv_layer.weight[neuron_idx]
-        delta = torch.where(
-            pre_spiked,
-            torch.full_like(row, float(active_delta)),
-            torch.full_like(row, float(inactive_delta)),
-        )
-        if self.config.use_stabilizer:
-            delta = delta * (row - self.config.lower_bound) * (self.config.upper_bound - row)
-        row.add_(delta)
-        row.clamp_(self.config.lower_bound, self.config.upper_bound)
+    def _fallback_prediction(self, potentials: Tensor, num_classes: int, neurons_per_class: int) -> int:
+        scores = potentials.view(potentials.shape[0], num_classes, neurons_per_class, -1).amax(dim=(0, 2, 3))
+        return int(scores.argmax().item())

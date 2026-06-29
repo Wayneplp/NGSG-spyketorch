@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Unified entrypoint for continual-learning baseline reproduction runs.
 
@@ -11,7 +11,8 @@ This entrypoint focuses on orchestration while the trainer owns model details:
 5. save a per-run JSON result,
 6. append a compact CSV summary row.
 
-The catastrophic-forgetting baseline is now dispatched to an official`r`nSpykeTorch-backed trainer.
+The catastrophic-forgetting baseline is now dispatched to an official
+SpykeTorch-backed trainer.
 """
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ SUPPORTED_METHODS = {
     "langevin",
 }
 
-# 总表表头来记录每次实验结束之后数据到csv�?
+# Summary CSV fields.
 SUMMARY_FIELDS = [
     "timestamp",
     "run_name",
@@ -56,7 +57,7 @@ SUMMARY_FIELDS = [
 ]
 
 
-# 参数入口
+# CLI arguments.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a continual-learning baseline from a config file."
@@ -378,5 +379,7 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
 
 
