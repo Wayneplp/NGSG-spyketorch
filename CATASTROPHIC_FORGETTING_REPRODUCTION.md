@@ -2,7 +2,7 @@
 
 最后更新：2026-06-29
 
-本次补充：S3 R-STDP 已按 SpykeTorch tutorial 改为官方 snn.STDP + nti_stdp 两分支。
+本次补充：S3 R-STDP 已按 SpykeTorch tutorial 改为官方 snn.STDP + anti_stdp 两分支。
 
 ## 当前结论
 
@@ -229,6 +229,25 @@ C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config c
 - S3 reward update 能运行。
 - 训练和评估结果能写入 JSON/CSV。
 
+### 中等规模 SpykeTorch tutorial R-STDP 实验
+
+运行命令：
+```powershell
+C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config configs\baseline\catastrophic_mnist_emnist_medium.yaml --device auto --run-name medium_tutorial_rstdp_seed0
+```
+
+配置：每类 100 个训练样本、100 个测试样本；S1/S2 分别为 2/4 epoch；S3 R-STDP 为 task1 10 epoch、task2 5 epoch。
+
+结果：
+| 指标 | 数值 |
+| --- | --- |
+| Task1 after Task1 | 10.2% |
+| Task1 after Task2 | 10.0% |
+| Task2 after Task2 | 10.0% |
+| Forgetting | 0.2% |
+| Avg Acc | 10.0% |
+
+S3 训练 proxy：task1 在第 6-7 个 epoch 最高约 15.8%，随后回落到 10.7%；task2 基本维持在 10%。这说明当前实现虽然已经按 SpykeTorch tutorial 调用 `stdp + anti_stdp`，但中等规模下仍未形成有效分类能力，问题更可能在特征层参数、输入预处理、阈值、winner/class 映射或论文原始超参数对齐上。
 ## 当前仍需注意的问题
 
 S3 R-STDP 已经改成 SpykeTorch tutorial 的 `stdp + anti_stdp` 形式。后续重点不再是“是否使用官方 STDP”，而是复现实验细节是否足够接近论文：
@@ -253,4 +272,5 @@ C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config c
 ```
 
 完整配置非常耗时，建议先跑中等规模配置再跑完整 600/100 epoch。
+
 
