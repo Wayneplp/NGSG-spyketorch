@@ -1,15 +1,4 @@
-# Paper-source catastrophic forgetting baseline for
-# "Continuous Learning of Spiking Networks Trained with Local Rules".
-#
-# Protocol from the paper/Table 1:
-# 1. Initial training on MNIST digits.
-# 2. Subsequent training on EMNIST capital letters A, B, D, E, G, H, N, Q, R, S.
-# 3. MNIST data are not used during subsequent EMNIST training.
-# 4. Report initial MNIST, subsequent MNIST retention, and subsequent EMNIST.
-#
-# Current implementation: direct project port of the author's
-# dmitryanton68/continuous_learning MozafariMNIST2018 notebooks. It uses the
-# official SpykeTorch package and keeps the source conv/STDP/anti-STDP settings.
+﻿# Medium-scale port of dmitryanton68/continuous_learning catastrophic forgetting source.
 method: catastrophic
 seed: 0
 run_name: null
@@ -32,7 +21,8 @@ tasks:
         normalize: false
       labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
       mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-      train_samples_per_label: 2400
+      train_samples_per_label: 100
+      test_samples_per_label: 100
     - name: subsequent_emnist_capitals_ABDEGHNQRS
       dataset:
         dataset_name: emnist
@@ -40,14 +30,11 @@ tasks:
         data_root: data/emnist
         normalize: false
         fix_orientation: true
-      # torchvision EMNIST letters are 1-indexed: A=1, B=2, D=4, E=5,
-      # G=7, H=8, N=14, Q=17, R=18, S=19. Map them onto 10 output groups.
       labels: [1, 2, 4, 5, 7, 8, 14, 17, 18, 19]
       mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-      train_samples_per_label: 2400
-  task_order:
-    - 0
-    - 1
+      train_samples_per_label: 100
+      test_samples_per_label: 100
+  task_order: [0, 1]
 
 model:
   architecture: paper_spyketorch
@@ -73,13 +60,11 @@ model:
   local_normalization_radius: 8
 
 train:
-  # The source notebooks train one large tensor/DataLoader batch per epoch.
-  batch_size: 24000
+  # Paper source uses one full-batch DataLoader per epoch; for medium 1000 samples fits comfortably.
+  batch_size: 1000
   learning_rule: paper_source_rstdp
-  # Paper-reported long run: MNIST initial training uses 600 epochs; subsequent
-  # EMNIST trains S1 for 2 epochs, S2 for 4 epochs, and S3 R-STDP for 100 epochs.
-  num_epochs_task1: 600
-  num_epochs_task2: 100
+  num_epochs_task1: 50
+  num_epochs_task2: 10
   s1_stdp_epochs_task1: 2
   s2_stdp_epochs_task1: 4
   s1_stdp_epochs_task2: 2
@@ -87,7 +72,7 @@ train:
   paper_adaptive_int: 0.5
   paper_adaptive_min: 0.0
   reset_learning_rates_each_stage: true
-  progress_interval_samples: 2400
+  progress_interval_samples: 1000
   shuffle: true
 
 eval:

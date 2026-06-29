@@ -18,10 +18,12 @@ logs/
 checkpoints/
 results/
 experiments/*/
+data/
 
 # Large local bundles not needed for reproduction
 SKILL/
 SKILL.zip
+CATASTROPHIC_FORGETTING_REPRODUCTION.pdf
 
 # Keep placeholder files if we add them later
 !experiments/.gitkeep

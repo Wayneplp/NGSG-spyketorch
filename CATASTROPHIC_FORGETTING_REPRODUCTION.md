@@ -1,12 +1,94 @@
-﻿# 灾难性遗忘复现状态记录
+# 灾难性遗忘复现状态记录
 
 最后更新：2026-06-29
 
-本次补充：S3 R-STDP 已按 SpykeTorch tutorial 改为官方 snn.STDP + anti_stdp 两分支。
+本次补充：已暂停正在运行的中等规模实验，并把主 catastrophic baseline 切换为论文作者源码 dmitryanton68/continuous_learning 的 SpykeTorch 移植版。
 
+
+## 2026-06-29 最新更新：暂停运行并移植论文源码
+
+按你的要求，已经停止正在运行的 `paper_medium_source_port_seed0` 中等规模实验。停止前它没有报错，stderr 为空；进度到 task1 的 S3 R-STDP 第 24/50 个 epoch 左右，训练 proxy 约 45%-47%。这次停止是主动暂停，不是程序崩溃。
+
+这次整理后的主线不再继续修旧的近似实现，而是把论文作者源码仓库 `dmitryanton68/continuous_learning` 中的 `MozafariMNIST2018` 路线移植到当前项目：
+
+- 新增模型文件：`src/models/paper_mozafari.py`。
+- 新增模型入口：`PaperMozafariMNIST2018` / `build_paper_mozafari_network`。
+- trainer 中新增 paper-source 分支：当配置里 `model.architecture: paper_spyketorch` 时，直接走论文源码兼容训练流程。
+- 主完整配置 `configs/baseline/catastrophic_mnist_emnist.yaml` 已切换为 `architecture: paper_spyketorch` 和 `learning_rule: paper_source_rstdp`。
+- 中等规模调试配置保留在 `configs/baseline/catastrophic_mnist_emnist_paper_medium.yaml`。
+
+论文源码兼容实现目前对齐的关键点：
+
+| 模块 | 现在的实现 |
+| --- | --- |
+| 输入预处理 | 6 个 DoG kernel，`utils.Filter(..., padding=6, thresholds=50)`，`sf.local_normalization(..., 8)`，`utils.Intensity2Latency(15)` |
+| S1 | `snn.Convolution(6, 30, 5, 0.8, 0.05)`，阈值 15，`k=5` |
+| S2 | `snn.Convolution(30, 250, 3, 0.8, 0.05)`，阈值 10，`k=8` |
+| S3 | `snn.Convolution(250, 200, 5, 0.8, 0.05)` |
+| S1/S2 STDP | `snn.STDP(..., (0.004, -0.003))` |
+| S3 reward STDP | `snn.STDP(conv3, (0.004, -0.003), False, 0.2, 0.8)` |
+| S3 anti-STDP | `snn.STDP(conv3, (-0.004, 0.0005), False, 0.2, 0.8)` |
+| 输出映射 | 200 个 S3 feature map，每类 20 个，`decision_map = [0]*20 + ... + [9]*20` |
+| R-STDP 自适应学习率 | 按论文源码的 batch correct/wrong 比例更新 reward / punish 学习率 |
+
+关于 `use_weight_stabilizer`：这个字段不是论文实验中的一个显式超参数名。它来自我们旧 trainer 对 SpykeTorch `snn.STDP` 的包装。论文作者源码里 S3 reward/anti-STDP 是直接写死为 `use_stabilizer=False, lower_bound=0.2, upper_bound=0.8`；S1/S2 则使用 `snn.STDP` 默认行为。因此新的 `paper_spyketorch` 路线不再通过全局 `use_weight_stabilizer` 控制论文实验，避免把旧诊断参数误当成论文设置。
+
+当前推荐命令：
+
+```powershell
+# 只检查配置和任务规模，不训练
+C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config configs\baseline\catastrophic_mnist_emnist.yaml --device auto --dry-run --run-name paper_source_strict_dryrun
+
+# 中等规模源码移植版，用来先看学习曲线
+C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config configs\baseline\catastrophic_mnist_emnist_paper_medium.yaml --device auto --run-name paper_medium_source_port_seed0
+
+# 完整论文规模，极慢，确认中等规模趋势正常后再跑
+C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config configs\baseline\catastrophic_mnist_emnist.yaml --device auto --run-name paper_ch4_catastrophic_source_seed0
+```
+
+仍需注意：当前移植已经按作者源码结构对齐，但 torchvision 的 EMNIST letters 读取、方向修正和作者仓库里预处理好的张量文件可能仍有细微差异。后续如果要追到论文表格数值，需要继续核对作者仓库里的数据保存格式和 notebook 中实际加载的 `.pt` 文件来源。
+
+## 2026-06-29 中等规模论文源码移植版运行结果
+
+运行名：`paper_medium_source_port_seed0_live`
+
+运行命令：
+
+```powershell
+C:\Users\pw\.conda\envs\Spyketorch\python.exe -u scripts\run_baseline.py --config configs\baseline\catastrophic_mnist_emnist_paper_medium.yaml --device auto --run-name paper_medium_source_port_seed0_live
+```
+
+实时日志：
+
+```powershell
+Get-Content -Path F:\paper_code\NGSG-spyketorch\experiments\_logs\paper_medium_source_port_seed0_live.out.log -Tail 30 -Wait
+```
+
+结果文件：`experiments/paper_medium_source_port_seed0_live/result.json`
+
+配置规模：MNIST 每类 100 个训练样本，EMNIST 每类 100 个训练样本；task1 的 S3 R-STDP 50 epoch，task2 的 S3 R-STDP 10 epoch。
+
+训练过程摘要：
+
+| 阶段 | 最后一个 S3 epoch 的 train_acc_proxy |
+| --- | --- |
+| task1 / MNIST | 54.3% |
+| task2 / EMNIST | 45.0% |
+
+最终测试指标：
+
+| 指标 | 数值 |
+| --- | --- |
+| Task1 after Task1 / MNIST 初训后 | 46.2% |
+| Task1 after Task2 / EMNIST 后 MNIST 保持 | 22.6% |
+| Task2 after Task2 / EMNIST 后 EMNIST | 41.7% |
+| Forgetting | 23.6 个百分点 |
+| Avg Acc | 32.15% |
+
+判断：这次中等规模结果没有回到随机水平，也没有 silent network；它已经出现论文 baseline 想观察的方向，即 MNIST 先学到一部分，随后训练 EMNIST 后 MNIST 明显下降。它和论文 Table 1 的 90.8% / 48.1% / 78.4% 仍然差距很大，但当前不是同等实验规模：这里是每类 100 个样本、S3 初训 50 epoch，而论文初训使用每类约 2400 个样本且 S3 初训 600 epoch。因此这次结果更适合作为“源码移植版能学习并能产生遗忘现象”的中等规模 smoke/diagnostic，而不是最终论文数值复现。
 ## 当前结论
 
-当前仓库的主实现已经从“仓库内近似版 STDP/R-STDP”切换为**调用官方 SpykeTorch 包**的实现。
+当前仓库的主 catastrophic forgetting 路线已经从“仓库内近似版 STDP/R-STDP”和“tutorial 风格近似复现”进一步切换为**论文作者源码 dmitryanton68/continuous_learning 的 SpykeTorch 移植版**。
 
 也就是说：
 
@@ -248,6 +330,66 @@ C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config c
 | Avg Acc | 10.0% |
 
 S3 训练 proxy：task1 在第 6-7 个 epoch 最高约 15.8%，随后回落到 10.7%；task2 基本维持在 10%。这说明当前实现虽然已经按 SpykeTorch tutorial 调用 `stdp + anti_stdp`，但中等规模下仍未形成有效分类能力，问题更可能在特征层参数、输入预处理、阈值、winner/class 映射或论文原始超参数对齐上。
+### 2026-06-29 诊断结论：准确率卡在随机水平的原因
+
+已停止完整严格实验 `paper_ch4_catastrophic_strict_seed0`。停止前进度为 task1 的 S3 第 6/600 个 epoch 左右，训练 proxy 仍约 10%，说明问题不是灾难性遗忘，而是 MNIST 初始任务尚未学起来。
+
+诊断结果：
+
+- CUDA 正常，训练进程确实在 RTX 3060 Laptop GPU 上运行，但 GPU 利用率较低，主要瓶颈是单样本 STDP/R-STDP Python 循环。
+- 随机初始化时 S3 winner 分布大致均匀，各层 spike 不为 0，因此不是完全 silent network。
+- 去掉 `pointwise_inhibition` 没有改善，反而使预测更偏向少数类，因此它不是主要原因。
+- 严格配置下 `weight_mean=0.8` 且 `weight_clip_max=0.8`，初始约 49%-50% 权重已经大于等于 0.8。使用官方 STDP stabilizer 时，更新项包含 `(weight - lower_bound) * (upper_bound - weight)`，权重靠近上界时更新接近 0，导致大量突触几乎被冻结。
+
+短诊断对照：
+
+| 设置 | S3 5 epoch 后趋势 |
+| --- | --- |
+| `use_weight_stabilizer: true`，`wmin=0.2,wmax=0.8` | 约 10%-11%，基本不动 |
+| `use_weight_stabilizer: false`，`wmin=0.2,wmax=0.8` | 训练 proxy 从 9% 升到约 30.5%，短诊断集约 37.5% |
+
+因此当前修正版先关闭 stabilizer，保留论文权重边界和 SpykeTorch tutorial 的 `stdp + anti_stdp` 训练形式，用中等规模实验验证 MNIST 是否能先学起来。
+
+### 修正版诊断配置
+
+文件：`configs/baseline/catastrophic_mnist_emnist_medium_stabilizer_off.yaml`
+
+主要设置：
+
+- 每类训练样本：100。
+- 每类测试样本：100。
+- `weight_clip_min: 0.2`。
+- `weight_clip_max: 0.8`。
+- `use_weight_stabilizer: false`。
+- S1/S2：2/4 epoch。
+- S3：task1 50 epoch，task2 10 epoch。
+- 每 1000 个样本输出一次进度日志。
+
+运行命令：
+
+```powershell
+C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config configs\baseline\catastrophic_mnist_emnist_medium_stabilizer_off.yaml --device auto --run-name medium_stabilizer_off_seed0
+```
+### 修正版运行中记录
+
+运行名：`medium_stabilizer_off_seed0`
+
+当前进度日志显示修正版已经进入 task1 的 S3 训练，早期训练 proxy 明显高于之前 stabilizer 开启时的随机水平：
+
+| S3 epoch | train_acc_proxy |
+| --- | --- |
+| 1/50 | 8.5% |
+| 2/50 | 15.5% |
+| 3/50 | 22.1% |
+| 4/50 | 26.7% |
+
+这说明关闭 stabilizer 后，S3 R-STDP 至少在中等规模诊断中已经开始学习。后续需要等 `result.json` 生成后再判断 MNIST test accuracy、EMNIST subsequent accuracy 和 forgetting。
+
+查看实时进度：
+
+```powershell
+Get-Content -Path F:\paper_code\NGSG-spyketorch\experiments\_logs\medium_stabilizer_off_seed0.out.log -Tail 30 -Wait
+```
 ## 当前仍需注意的问题
 
 S3 R-STDP 已经改成 SpykeTorch tutorial 的 `stdp + anti_stdp` 形式。后续重点不再是“是否使用官方 STDP”，而是复现实验细节是否足够接近论文：
@@ -272,5 +414,3 @@ C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config c
 ```
 
 完整配置非常耗时，建议先跑中等规模配置再跑完整 600/100 epoch。
-
-

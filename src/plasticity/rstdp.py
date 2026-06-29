@@ -98,6 +98,17 @@ class SpykeTorchRewardSTDP(nn.Module):
             "winner_count": len(winners),
         }
 
+    def update_learning_rate(
+        self,
+        reward_active: float,
+        reward_inactive: float,
+        punish_active: float,
+        punish_inactive: float,
+    ) -> None:
+        self.stdp.update_all_learning_rate(reward_active, reward_inactive)
+        self.anti_stdp.update_all_learning_rate(punish_active, punish_inactive)
+
     def _fallback_prediction(self, potentials: Tensor, num_classes: int, neurons_per_class: int) -> int:
         scores = potentials.view(potentials.shape[0], num_classes, neurons_per_class, -1).amax(dim=(0, 2, 3))
         return int(scores.argmax().item())
+
