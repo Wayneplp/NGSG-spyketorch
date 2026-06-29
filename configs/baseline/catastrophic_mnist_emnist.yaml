@@ -7,8 +7,8 @@
 # 3. MNIST data are not used during subsequent EMNIST training.
 # 4. Report initial MNIST, subsequent MNIST retention, and subsequent EMNIST.
 #
-# Current caveat: the repository implements an in-project approximation of
-# SpykeTorch-style STDP/R-STDP. It does not import the original SpykeTorch package.
+# Current implementation: the main path imports the official SpykeTorch package for
+# S1/S2 layers and STDP. Legacy approximations are stored under approx/legacy_approx/.
 method: catastrophic
 seed: 0
 run_name: null
@@ -60,15 +60,15 @@ model:
   s3_neurons: 200
   num_classes: 10
   neurons_per_class: 20
-  pool_kernel_sizes: [2, 2, 2]
-  pool_strides: [2, 2, 2]
-  inhibition_radii: [0, 0, 0]
+  pool_kernel_sizes: [2, 2]
+  pool_strides: [2, 2]
+  inhibition_radii: [0, 0]
   weight_mean: 0.8
   weight_std: 0.05
 
 train:
   batch_size: 64
-  learning_rule: paper_stdp_rstdp
+  learning_rule: spyketorch_stdp_rstdp
   # Paper-reported long run: MNIST initial training uses 600 epochs; subsequent
   # EMNIST trains S1 for 2 epochs, S2 for 4 epochs, and S3 R-STDP for 100 epochs.
   num_epochs_task1: 600

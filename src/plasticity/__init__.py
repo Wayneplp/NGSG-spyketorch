@@ -1,6 +1,6 @@
-from .rstdp import RSTDPConfig, RewardModulatedSTDP
+from .rstdp import SpykeTorchRSTDPConfig, SpykeTorchRewardSTDP
 
 __all__ = [
-    "RSTDPConfig",
-    "RewardModulatedSTDP",
+    "SpykeTorchRSTDPConfig",
+    "SpykeTorchRewardSTDP",
 ]

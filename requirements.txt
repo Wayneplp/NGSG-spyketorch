@@ -2,3 +2,4 @@ numpy>=1.24
 PyYAML>=6.0
 torch>=2.1
 torchvision>=0.16
+git+https://github.com/miladmozafari/SpykeTorch.git

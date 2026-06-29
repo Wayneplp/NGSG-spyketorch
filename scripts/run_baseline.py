@@ -2,7 +2,7 @@
 """
 Unified entrypoint for continual-learning baseline reproduction runs.
 
-This first version focuses on orchestration rather than model details:
+This entrypoint focuses on orchestration while the trainer owns model details:
 
 1. load a baseline config file,
 2. validate the requested method,
@@ -11,8 +11,7 @@ This first version focuses on orchestration rather than model details:
 5. save a per-run JSON result,
 6. append a compact CSV summary row.
 
-The actual training logic is intentionally left in dedicated runner classes so
-we can plug in SpykeTorch implementations incrementally.
+The catastrophic-forgetting baseline is now dispatched to an official`r`nSpykeTorch-backed trainer.
 """
 
 from __future__ import annotations
@@ -41,7 +40,7 @@ SUPPORTED_METHODS = {
     "langevin",
 }
 
-# 总表表头来记录每次实验结束之后数据到csv中
+# 总表表头来记录每次实验结束之后数据到csv�?
 SUMMARY_FIELDS = [
     "timestamp",
     "run_name",
@@ -379,3 +378,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
