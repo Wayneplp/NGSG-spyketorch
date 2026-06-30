@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import gzip
 import hashlib
 import json
 import os
 from pathlib import Path
+import struct
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 import random
 
+from PIL import Image
 import torch
 from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets, transforms
@@ -35,6 +38,74 @@ class CachedTensorDataset(Dataset[Any]):
     def __getitem__(self, index: int) -> Any:
         payload = torch.load(self.cache_dir / f"{index:06d}.pt", map_location="cpu")
         return payload["input"], int(payload["target"])
+
+
+class RawEMNISTDataset(Dataset[Any]):
+    """Lightweight EMNIST reader that consumes raw idx or idx.gz files directly."""
+
+    def __init__(
+        self,
+        root: Path,
+        split: str,
+        train: bool,
+        transform: Optional[Any] = None,
+    ) -> None:
+        self.root = Path(root)
+        self.split = str(split).lower()
+        self.train = bool(train)
+        self.transform = transform
+        suffix = "train" if self.train else "test"
+        image_stem = f"emnist-{self.split}-{suffix}-images-idx3-ubyte"
+        label_stem = f"emnist-{self.split}-{suffix}-labels-idx1-ubyte"
+
+        images_path = self._resolve_raw_file(image_stem)
+        labels_path = self._resolve_raw_file(label_stem)
+
+        self.data = self._read_idx_images(images_path)
+        self.targets = self._read_idx_labels(labels_path)
+
+    def _resolve_raw_file(self, stem: str) -> Path:
+        candidates = [
+            self.root / "EMNIST" / "raw" / stem,
+            self.root / "EMNIST" / "raw" / f"{stem}.gz",
+            self.root / "EMNIST" / "raw" / "gzip" / f"{stem}.gz",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        raise FileNotFoundError(f"Could not find EMNIST raw file for {stem} under {self.root}")
+
+    def _read_bytes(self, path: Path) -> bytes:
+        if path.suffix == ".gz":
+            with gzip.open(path, "rb") as handle:
+                return handle.read()
+        return path.read_bytes()
+
+    def _read_idx_images(self, path: Path) -> torch.Tensor:
+        payload = self._read_bytes(path)
+        magic, size, rows, cols = struct.unpack(">IIII", payload[:16])
+        if magic != 2051:
+            raise ValueError(f"Unexpected image magic number {magic} in {path}")
+        tensor = torch.frombuffer(memoryview(payload)[16:], dtype=torch.uint8).clone()
+        return tensor.view(size, rows, cols)
+
+    def _read_idx_labels(self, path: Path) -> torch.Tensor:
+        payload = self._read_bytes(path)
+        magic, size = struct.unpack(">II", payload[:8])
+        if magic != 2049:
+            raise ValueError(f"Unexpected label magic number {magic} in {path}")
+        tensor = torch.frombuffer(memoryview(payload)[8:], dtype=torch.uint8).clone()
+        return tensor.view(size)
+
+    def __len__(self) -> int:
+        return int(self.targets.shape[0])
+
+    def __getitem__(self, index: int) -> Any:
+        image = Image.fromarray(self.data[index].numpy(), mode="L")
+        label = int(self.targets[index].item())
+        if self.transform is not None:
+            image = self.transform(image)
+        return image, label
 
 
 def _hash_jsonable(payload: Any) -> str:
@@ -259,9 +330,18 @@ def _build_torchvision_dataset(
             normalize=normalize,
             fix_orientation=bool(dataset_config.get("fix_orientation", True)),
         )
+        split = str(dataset_config.get("split", "letters"))
+        raw_gzip_path = data_root / "EMNIST" / "raw" / "gzip" / f"emnist-{split.lower()}-{'train' if train else 'test'}-images-idx3-ubyte.gz"
+        if raw_gzip_path.exists():
+            return RawEMNISTDataset(
+                root=data_root,
+                split=split,
+                train=train,
+                transform=transform,
+            )
         return datasets.EMNIST(
             root=data_root,
-            split=str(dataset_config.get("split", "letters")),
+            split=split,
             train=train,
             download=True,
             transform=transform,
