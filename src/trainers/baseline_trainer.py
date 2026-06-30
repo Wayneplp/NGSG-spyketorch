@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
+import time
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 import torch
@@ -308,9 +309,12 @@ class BaselineTrainer:
     ) -> Dict[str, Any]:
         progress_every = int(train_cfg.get("progress_interval_samples", 1000))
         history = []
+        best_samples = 0
+        stage_start = time.time()
         for epoch_idx in range(epochs):
             model.train()
             samples = 0
+            epoch_start = time.time()
             for batch in dataloader:
                 inputs, _ = move_batch_to_device(batch, device)
                 for sample_idx in range(int(inputs.shape[0])):
@@ -319,8 +323,19 @@ class BaselineTrainer:
                     samples += 1
                     if progress_every > 0 and samples % progress_every == 0:
                         print(f"[paper s{layer_idx}] epoch {epoch_idx + 1}/{epochs} samples={samples}", flush=True)
+            best_samples = max(best_samples, samples)
+            epoch_seconds = time.time() - epoch_start
+            elapsed_seconds = time.time() - stage_start
+            remaining_seconds = self._eta_seconds(elapsed_seconds, epoch_idx + 1, epochs)
             history.append({"epoch": epoch_idx + 1, "samples": samples, "stdp_updates": samples})
-            print(f"[paper s{layer_idx}] epoch {epoch_idx + 1}/{epochs} done samples={samples}", flush=True)
+            print(
+                f"[paper s{layer_idx}] epoch {epoch_idx + 1}/{epochs} done "
+                f"samples={samples} best_samples={best_samples} "
+                f"epoch_time={self._format_seconds(epoch_seconds)} "
+                f"elapsed={self._format_seconds(elapsed_seconds)} "
+                f"eta={self._format_seconds(remaining_seconds)}",
+                flush=True,
+            )
         return {"layer": f"s{layer_idx}", "epochs": epochs, "history": history}
 
     def train_paper_rstdp(
@@ -339,12 +354,15 @@ class BaselineTrainer:
         app = float(model.anti_stdp3.learning_rate[0][1].item())
         anp = float(model.anti_stdp3.learning_rate[0][0].item())
         history = []
+        best_acc1 = 0.0
+        stage_start = time.time()
         for epoch_idx in range(epochs):
             model.train()
             correct = 0
             wrong = 0
             silent = 0
             samples = 0
+            epoch_start = time.time()
             for batch in dataloader:
                 inputs, targets = move_batch_to_device(batch, device)
                 batch_correct = 0
@@ -384,6 +402,11 @@ class BaselineTrainer:
                 wrong += batch_wrong
                 silent += batch_silent
             train_acc_proxy = float(correct / max(samples, 1))
+            best_acc1 = max(best_acc1, train_acc_proxy)
+            epoch_seconds = time.time() - epoch_start
+            elapsed_seconds = time.time() - stage_start
+            remaining_seconds = self._eta_seconds(elapsed_seconds, epoch_idx + 1, epochs)
+            silent_rate = float(silent / max(samples, 1))
             history.append(
                 {
                     "epoch": epoch_idx + 1,
@@ -395,8 +418,12 @@ class BaselineTrainer:
                 }
             )
             print(
-                f"[paper s3] epoch {epoch_idx + 1}/{epochs} done samples={samples} "
-                f"train_acc_proxy={train_acc_proxy:.4f} correct={correct} wrong={wrong} silent={silent}",
+                f"[paper s3] epoch {epoch_idx + 1}/{epochs} done "
+                f"samples={samples} acc1={train_acc_proxy:.4f} best_acc1={best_acc1:.4f} "
+                f"correct={correct} wrong={wrong} silent={silent} silent_rate={silent_rate:.4f} "
+                f"epoch_time={self._format_seconds(epoch_seconds)} "
+                f"elapsed={self._format_seconds(elapsed_seconds)} "
+                f"eta={self._format_seconds(remaining_seconds)}",
                 flush=True,
             )
         return {"stage": "s3", "epochs": epochs, "learning_rule": "paper_source_rstdp", "history": history}
@@ -416,8 +443,11 @@ class BaselineTrainer:
         history = []
         update_idx = 0
         progress_every = int(train_cfg.get("progress_interval_samples", 1000))
+        best_samples = 0
+        stage_start = time.time()
         for epoch_idx in range(epochs):
             samples = 0
+            epoch_start = time.time()
             for image, _ in self.iter_samples(dataloader, device):
                 encoded = model.encode(image)
                 s1 = model.s1_step(encoded)
@@ -427,8 +457,19 @@ class BaselineTrainer:
                 update_idx += 1
                 if progress_every > 0 and samples % progress_every == 0:
                     print(f"[s1] epoch {epoch_idx + 1}/{epochs} samples={samples}", flush=True)
+            best_samples = max(best_samples, samples)
+            epoch_seconds = time.time() - epoch_start
+            elapsed_seconds = time.time() - stage_start
+            remaining_seconds = self._eta_seconds(elapsed_seconds, epoch_idx + 1, epochs)
             history.append({"epoch": epoch_idx + 1, "samples": samples, "stdp_updates": samples})
-            print(f"[s1] epoch {epoch_idx + 1}/{epochs} done samples={samples}", flush=True)
+            print(
+                f"[s1] epoch {epoch_idx + 1}/{epochs} done "
+                f"samples={samples} best_samples={best_samples} "
+                f"epoch_time={self._format_seconds(epoch_seconds)} "
+                f"elapsed={self._format_seconds(elapsed_seconds)} "
+                f"eta={self._format_seconds(remaining_seconds)}",
+                flush=True,
+            )
         return {"layer": "s1", "epochs": epochs, "history": history}
 
     def train_s2_stdp(self, model: nn.Module, dataloader: Any, config: Mapping[str, Any], device: torch.device, epochs: int) -> Dict[str, Any]:
@@ -446,8 +487,11 @@ class BaselineTrainer:
         history = []
         update_idx = 0
         progress_every = int(train_cfg.get("progress_interval_samples", 1000))
+        best_samples = 0
+        stage_start = time.time()
         for epoch_idx in range(epochs):
             samples = 0
+            epoch_start = time.time()
             for image, _ in self.iter_samples(dataloader, device):
                 encoded = model.encode(image)
                 s1 = model.s1_step(encoded)
@@ -458,8 +502,19 @@ class BaselineTrainer:
                 update_idx += 1
                 if progress_every > 0 and samples % progress_every == 0:
                     print(f"[s2] epoch {epoch_idx + 1}/{epochs} samples={samples}", flush=True)
+            best_samples = max(best_samples, samples)
+            epoch_seconds = time.time() - epoch_start
+            elapsed_seconds = time.time() - stage_start
+            remaining_seconds = self._eta_seconds(elapsed_seconds, epoch_idx + 1, epochs)
             history.append({"epoch": epoch_idx + 1, "samples": samples, "stdp_updates": samples})
-            print(f"[s2] epoch {epoch_idx + 1}/{epochs} done samples={samples}", flush=True)
+            print(
+                f"[s2] epoch {epoch_idx + 1}/{epochs} done "
+                f"samples={samples} best_samples={best_samples} "
+                f"epoch_time={self._format_seconds(epoch_seconds)} "
+                f"elapsed={self._format_seconds(elapsed_seconds)} "
+                f"eta={self._format_seconds(remaining_seconds)}",
+                flush=True,
+            )
         return {"layer": "s2", "epochs": epochs, "history": history}
 
     def train_s3_rstdp(
@@ -479,11 +534,14 @@ class BaselineTrainer:
         history = []
         update_idx = 0
         progress_every = int(train_cfg.get("progress_interval_samples", 1000))
+        best_acc1 = 0.0
+        stage_start = time.time()
         for epoch_idx in range(epochs):
             samples = 0
             correct = 0
             reward_updates = 0
             punish_updates = 0
+            epoch_start = time.time()
             for image, target in self.iter_samples(dataloader, device):
                 features = model.forward_spikes(image)
                 self._apply_rstdp_schedule(rstdp, train_cfg, update_idx)
@@ -510,6 +568,10 @@ class BaselineTrainer:
                         flush=True,
                     )
             train_acc_proxy = float(correct / max(samples, 1))
+            best_acc1 = max(best_acc1, train_acc_proxy)
+            epoch_seconds = time.time() - epoch_start
+            elapsed_seconds = time.time() - stage_start
+            remaining_seconds = self._eta_seconds(elapsed_seconds, epoch_idx + 1, epochs)
             history.append(
                 {
                     "epoch": epoch_idx + 1,
@@ -520,11 +582,29 @@ class BaselineTrainer:
                 }
             )
             print(
-                f"[s3] epoch {epoch_idx + 1}/{epochs} done samples={samples} "
-                f"train_acc_proxy={train_acc_proxy:.4f} reward={reward_updates} punish={punish_updates}",
+                f"[s3] epoch {epoch_idx + 1}/{epochs} done "
+                f"samples={samples} acc1={train_acc_proxy:.4f} best_acc1={best_acc1:.4f} "
+                f"reward={reward_updates} punish={punish_updates} "
+                f"epoch_time={self._format_seconds(epoch_seconds)} "
+                f"elapsed={self._format_seconds(elapsed_seconds)} "
+                f"eta={self._format_seconds(remaining_seconds)}",
                 flush=True,
             )
         return {"stage": "s3", "epochs": epochs, "learning_rule": "spyketorch_stdp_anti_stdp", "history": history}
+
+    def _eta_seconds(self, elapsed_seconds: float, completed_epochs: int, total_epochs: int) -> float:
+        if completed_epochs <= 0 or total_epochs <= completed_epochs:
+            return 0.0
+        avg_epoch_seconds = float(elapsed_seconds) / float(completed_epochs)
+        return avg_epoch_seconds * float(total_epochs - completed_epochs)
+
+    def _format_seconds(self, seconds: float) -> str:
+        total = max(int(round(seconds)), 0)
+        hours, remainder = divmod(total, 3600)
+        minutes, secs = divmod(remainder, 60)
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        return f"{minutes:02d}:{secs:02d}"
 
     def _scheduled_rate(self, base_rate: float, train_cfg: Mapping[str, Any], update_idx: int) -> float:
         every = int(train_cfg.get("stdp_lr_multiply_every", 0))
