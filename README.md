@@ -97,6 +97,21 @@ find data/preprocessed/paper_source -name '*.pt' | wc -l
 tail -n 50 logs/preprocess_*.log
 ```
 
+
+## Training Reuse Strategy
+
+Paper-source runs now have three reuse layers:
+
+- Input preprocessing cache under `data/preprocessed/paper_source/<hash>/`.
+- S1/S2 feature checkpoints under `checkpoints/features/`.
+- C2 pooled feature cache under `data/features/c2/<hash>/`, which is the preferred fast entry point for repeated S3/NGSG experiments.
+
+The long-lived feature checkpoint should use the paper-aligned feature schedule: S1 STDP for 2 epochs and S2 STDP for 4 epochs. Smoke tests may use smaller datasets, but should not replace the shared S1/S2 checkpoint used for real baseline and NGSG comparisons.
+
+Use `configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml` to build these reusable artifacts without running S3 R-STDP or evaluation.
+
+The full `S1=2/S2=4` `checkpoints/features/paper_task*_s1e2_s2e4_*.pt` files are small and tracked in git for server reuse. The larger `data/preprocessed/` and `data/features/c2/` caches stay out of git; rebuild them on the server or transfer them separately.
+
 ## Documentation Map
 
 - Baseline reproduction plan: `REPRODUCTION_PLAN.md`

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
+import hashlib
 import time
 from typing import Any, Dict, Mapping, Optional, Sequence
 
@@ -16,6 +17,8 @@ from src.plasticity import SpykeTorchRSTDPConfig, SpykeTorchRewardSTDP
 from src.utils.data import (
     ConcatenatedSubset,
     TaskBundle,
+    _describe_dataset_for_cache,
+    _hash_jsonable,
     build_preprocessed_tensor_cache,
     build_dataloader,
     build_task_bundles,
@@ -75,9 +78,31 @@ class BaselineTrainer:
             device=device,
             stage_name="task1",
         )
-        task1_after_task1 = self.evaluate(model, test_task1_loader, device)
 
         train_task2_loader = self.build_task2_train_loader(task1, task2, config)
+        if bool(config.get("train", {}).get("feature_only", False)):
+            task2_training_stats = self.train_single_task(
+                model=model,
+                dataloader=train_task2_loader,
+                config=config,
+                rstdp=rstdp,
+                device=device,
+                stage_name="task2",
+            )
+            return TrainerResult(
+                metrics=self.empty_metrics(),
+                notes="Feature-only run: saved/reused S1/S2 checkpoints and C2 feature caches; skipped S3 training and evaluation.",
+                extra={
+                    "device": str(device),
+                    "task_summary": bundle_summary(task_bundles),
+                    "trainer_plan": self.describe_plan(config),
+                    "task1_training": task1_training_stats,
+                    "task2_training": task2_training_stats,
+                    "model_summary": self.summarize_model(model),
+                },
+            )
+
+        task1_after_task1 = self.evaluate(model, test_task1_loader, device)
         task2_training_stats = self.train_single_task(
             model=model,
             dataloader=train_task2_loader,
@@ -268,6 +293,169 @@ class BaselineTrainer:
         stats["output_training"] = self.train_s3_rstdp(model, dataloader, config, rstdp, device, s3_epochs)
         return stats
 
+    def _paper_feature_state_dict(self, model: nn.Module) -> Dict[str, Any]:
+        return {
+            "conv1": model.conv1.state_dict(),
+            "conv2": model.conv2.state_dict(),
+        }
+
+    def _paper_feature_state_digest(self, model: nn.Module) -> str:
+        digest = hashlib.sha1()
+        for layer_name in ("conv1", "conv2"):
+            state = getattr(model, layer_name).state_dict()
+            for tensor_name, tensor in sorted(state.items()):
+                cpu_tensor = tensor.detach().cpu().contiguous()
+                digest.update(layer_name.encode("utf-8"))
+                digest.update(tensor_name.encode("utf-8"))
+                digest.update(str(tuple(cpu_tensor.shape)).encode("utf-8"))
+                digest.update(str(cpu_tensor.dtype).encode("utf-8"))
+                digest.update(cpu_tensor.numpy().tobytes())
+        return digest.hexdigest()
+
+    def _paper_feature_checkpoint_path(
+        self,
+        model: nn.Module,
+        dataloader: Any,
+        config: Mapping[str, Any],
+        stage_name: str,
+        s1_epochs: int,
+        s2_epochs: int,
+    ) -> tuple[Path, Dict[str, Any]]:
+        train_cfg = config.get("train", {})
+        checkpoint_cfg = train_cfg.get("feature_checkpoint", {})
+        root_dir = Path(str(checkpoint_cfg.get("root_dir", "checkpoints/features")))
+        dataset = getattr(dataloader, "dataset", None)
+        metadata = {
+            "version": 1,
+            "kind": "paper_s1_s2_feature_checkpoint",
+            "stage": stage_name,
+            "seed": int(config.get("seed", 0)),
+            "method": self.method_name,
+            "model": dict(config.get("model", {})),
+            "data": dict(config.get("data", {})),
+            "dataset": _describe_dataset_for_cache(dataset) if dataset is not None else None,
+            "s1_epochs": int(s1_epochs),
+            "s2_epochs": int(s2_epochs),
+            "batch_size": int(train_cfg.get("batch_size", 64)),
+            "shuffle": bool(train_cfg.get("shuffle", True)),
+            "pre_state_digest": self._paper_feature_state_digest(model),
+        }
+        fingerprint = _hash_jsonable(metadata)[:16]
+        filename = f"paper_{stage_name}_s1e{s1_epochs}_s2e{s2_epochs}_{fingerprint}.pt"
+        return root_dir / filename, metadata
+
+    def load_paper_feature_checkpoint(
+        self,
+        model: nn.Module,
+        dataloader: Any,
+        config: Mapping[str, Any],
+        device: torch.device,
+        stage_name: str,
+        s1_epochs: int,
+        s2_epochs: int,
+    ) -> Dict[str, Any]:
+        checkpoint_cfg = config.get("train", {}).get("feature_checkpoint", {})
+        enabled = bool(checkpoint_cfg.get("enabled", False))
+        if not enabled or not bool(checkpoint_cfg.get("load", True)) or (s1_epochs <= 0 and s2_epochs <= 0):
+            return {"enabled": enabled, "loaded": False}
+        checkpoint_path, metadata = self._paper_feature_checkpoint_path(model, dataloader, config, stage_name, s1_epochs, s2_epochs)
+        if not checkpoint_path.exists():
+            return {"enabled": True, "loaded": False, "path": str(checkpoint_path), "metadata": metadata}
+        payload = torch.load(checkpoint_path, map_location=device)
+        model.conv1.load_state_dict(payload["conv1"])
+        model.conv2.load_state_dict(payload["conv2"])
+        return {
+            "enabled": True,
+            "loaded": True,
+            "path": str(checkpoint_path),
+            "metadata": payload.get("metadata", metadata),
+        }
+
+    def save_paper_feature_checkpoint(
+        self,
+        model: nn.Module,
+        dataloader: Any,
+        config: Mapping[str, Any],
+        stage_name: str,
+        s1_epochs: int,
+        s2_epochs: int,
+        checkpoint_info: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        checkpoint_cfg = config.get("train", {}).get("feature_checkpoint", {})
+        enabled = bool(checkpoint_cfg.get("enabled", False))
+        if not enabled or not bool(checkpoint_cfg.get("save", True)) or (s1_epochs <= 0 and s2_epochs <= 0):
+            return {"enabled": enabled, "saved": False}
+        if checkpoint_info and checkpoint_info.get("path"):
+            checkpoint_path = Path(str(checkpoint_info["path"]))
+            metadata = dict(checkpoint_info.get("metadata", {}))
+        else:
+            checkpoint_path, metadata = self._paper_feature_checkpoint_path(model, dataloader, config, stage_name, s1_epochs, s2_epochs)
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "metadata": metadata,
+            "conv1": model.conv1.state_dict(),
+            "conv2": model.conv2.state_dict(),
+            "post_state_digest": self._paper_feature_state_digest(model),
+        }
+        torch.save(payload, checkpoint_path)
+        print(f"[paper features] saved S1/S2 checkpoint: {checkpoint_path}", flush=True)
+        return {"enabled": True, "saved": True, "path": str(checkpoint_path), "metadata": metadata}
+    def build_paper_s3_input_cache_loader(
+        self,
+        model: nn.Module,
+        dataloader: Any,
+        config: Mapping[str, Any],
+        stage_name: str,
+    ) -> tuple[Any, Dict[str, Any]]:
+        cache_cfg = config.get("train", {}).get("c2_feature_cache", {})
+        enabled = bool(cache_cfg.get("enabled", False))
+        if not enabled:
+            return dataloader, {"enabled": False}
+        if not hasattr(model, "extract_s3_input"):
+            return dataloader, {"enabled": False, "reason": "model_has_no_extract_s3_input"}
+
+        source_dataset = getattr(dataloader, "dataset", None)
+        if source_dataset is None:
+            return dataloader, {"enabled": False, "reason": "dataloader_has_no_dataset"}
+
+        cache_root = Path(str(cache_cfg.get("root_dir", "data/features/c2")))
+        metadata = {
+            "implementation": "paper_c2_to_s3_input_v1",
+            "stage": stage_name,
+            "seed": int(config.get("seed", 0)),
+            "method": self.method_name,
+            "model": dict(config.get("model", {})),
+            "data": dict(config.get("data", {})),
+            "feature_state_digest": self._paper_feature_state_digest(model),
+        }
+        was_training = model.training
+        model.eval()
+
+        def encode_s3_input(sample: Any) -> torch.Tensor:
+            with torch.no_grad():
+                return model.extract_s3_input(sample)
+
+        cached_dataset = build_preprocessed_tensor_cache(
+            dataset=source_dataset,
+            cache_root=cache_root,
+            encoder=encode_s3_input,
+            metadata=metadata,
+            feature_kind="paper_s3_input",
+        )
+        if was_training:
+            model.train()
+        cached_loader = self.build_train_loader(cached_dataset, config)
+        print(f"[paper c2-cache] using S3 input cache: {cached_dataset.cache_dir}", flush=True)
+        return cached_loader, {
+            "enabled": True,
+            "feature_kind": "paper_s3_input",
+            "cache_dir": str(cached_dataset.cache_dir),
+            "metadata": metadata,
+        }
+
+    def _is_paper_s3_input_loader(self, dataloader: Any) -> bool:
+        dataset = getattr(dataloader, "dataset", None)
+        return str(getattr(dataset, "feature_kind", "")) == "paper_s3_input"
     def train_paper_single_task(
         self,
         model: nn.Module,
@@ -291,13 +479,49 @@ class BaselineTrainer:
             "learning_rule": "paper_source_spyketorch_stdp_anti_stdp",
             "feature_training": {},
         }
-        if s1_epochs > 0:
-            stats["feature_training"]["s1"] = self.train_paper_unsupervised(model, dataloader, device, 1, s1_epochs, train_cfg)
-        if s2_epochs > 0:
-            stats["feature_training"]["s2"] = self.train_paper_unsupervised(model, dataloader, device, 2, s2_epochs, train_cfg)
-        stats["output_training"] = self.train_paper_rstdp(model, dataloader, device, s3_epochs, train_cfg)
-        return stats
 
+        checkpoint_info = self.load_paper_feature_checkpoint(
+            model=model,
+            dataloader=dataloader,
+            config=config,
+            device=device,
+            stage_name=stage_name,
+            s1_epochs=s1_epochs,
+            s2_epochs=s2_epochs,
+        )
+        stats["feature_checkpoint"] = checkpoint_info
+
+        if checkpoint_info.get("loaded"):
+            print(f"[paper features] loaded S1/S2 checkpoint: {checkpoint_info.get('path')}", flush=True)
+            stats["feature_training"]["s1"] = {"layer": "s1", "epochs": s1_epochs, "skipped": "loaded_feature_checkpoint"}
+            stats["feature_training"]["s2"] = {"layer": "s2", "epochs": s2_epochs, "skipped": "loaded_feature_checkpoint"}
+        else:
+            if s1_epochs > 0:
+                stats["feature_training"]["s1"] = self.train_paper_unsupervised(model, dataloader, device, 1, s1_epochs, train_cfg)
+            if s2_epochs > 0:
+                stats["feature_training"]["s2"] = self.train_paper_unsupervised(model, dataloader, device, 2, s2_epochs, train_cfg)
+            stats["feature_checkpoint"] = self.save_paper_feature_checkpoint(
+                model=model,
+                dataloader=dataloader,
+                config=config,
+                stage_name=stage_name,
+                s1_epochs=s1_epochs,
+                s2_epochs=s2_epochs,
+                checkpoint_info=checkpoint_info,
+            )
+
+        s3_dataloader, feature_cache_info = self.build_paper_s3_input_cache_loader(
+            model=model,
+            dataloader=dataloader,
+            config=config,
+            stage_name=stage_name,
+        )
+        stats["feature_cache"] = feature_cache_info
+        if bool(train_cfg.get("feature_only", False)):
+            stats["output_training"] = {"stage": "s3", "epochs": 0, "skipped": "feature_only"}
+            return stats
+        stats["output_training"] = self.train_paper_rstdp(model, s3_dataloader, device, s3_epochs, train_cfg)
+        return stats
     def train_paper_unsupervised(
         self,
         model: nn.Module,
@@ -356,6 +580,8 @@ class BaselineTrainer:
         history = []
         best_acc1 = 0.0
         stage_start = time.time()
+        using_s3_input_cache = self._is_paper_s3_input_loader(dataloader) and hasattr(model, "forward_from_s3_input")
+        feature_source = "cached_c2_s3_input" if using_s3_input_cache else "raw_or_preprocessed_input"
         for epoch_idx in range(epochs):
             model.train()
             correct = 0
@@ -370,7 +596,10 @@ class BaselineTrainer:
                 batch_silent = 0
                 batch_total = int(inputs.shape[0])
                 for sample_idx in range(batch_total):
-                    decision = int(model(inputs[sample_idx], 3))
+                    if using_s3_input_cache:
+                        decision = int(model.forward_from_s3_input(inputs[sample_idx]))
+                    else:
+                        decision = int(model(inputs[sample_idx], 3))
                     target = int(targets[sample_idx].item())
                     if decision != -1:
                         if decision == target:
@@ -426,7 +655,13 @@ class BaselineTrainer:
                 f"eta={self._format_seconds(remaining_seconds)}",
                 flush=True,
             )
-        return {"stage": "s3", "epochs": epochs, "learning_rule": "paper_source_rstdp", "history": history}
+        return {
+            "stage": "s3",
+            "epochs": epochs,
+            "learning_rule": "paper_source_rstdp",
+            "feature_source": feature_source,
+            "history": history,
+        }
 
     def train_s1_stdp(self, model: nn.Module, dataloader: Any, config: Mapping[str, Any], device: torch.device, epochs: int) -> Dict[str, Any]:
         train_cfg = config.get("train", {})

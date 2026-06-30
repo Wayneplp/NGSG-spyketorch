@@ -80,11 +80,9 @@ C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config c
 ## 4. 推荐复现顺序
 
 1. catastrophic forgetting baseline
-2. joint training
-3. frozen large weights
-4. Langevin dynamics
-5. winner-frequency logging, only after the paper-source baseline is trusted
-6. NGSG growth logic, only after baseline behavior is stable
+2. winner-frequency logging, only after the paper-source baseline is trusted
+3. NGSG growth logic, only after baseline behavior is stable
+4. 其他保护式 baseline（如 frozen large weights / Langevin）仅在论文对比需要时再补；当前不复现 joint training
 
 catastrophic forgetting baseline 仍然是第一优先级，因为它最容易验证数据流、训练流和测试流是否正确。如果它都不稳定，后面的保护机制和 NGSG 对比没有意义。
 
@@ -134,7 +132,22 @@ Task 1 先训练 MNIST，Task 2 再继续在同一网络上训练 EMNIST letters
 
 这些是运行产物，默认不进 git。需要写入论文或长期保留的信息，应转写到 Markdown 文档或最终表格中。
 
-## 7. 实验记录模板
+
+## 7. 训练加速与复用策略
+
+当前 paper-source 路线按三层缓存降低试错成本：
+
+1. 输入预处理缓存：`data/preprocessed/paper_source/<hash>/`，避免重复 DoG/local-normalization/latency encoding。
+2. S1/S2 feature checkpoint：`checkpoints/features/`，保存训练后的 `conv1/conv2` 权重。
+3. C2 feature cache：`data/features/c2/<hash>/`，保存进入 S3 前的 C2 pooled spikes，后续调 S3、novelty gate、winner frequency、reserve neuron 和 synapse growth 时优先从这里开始。
+
+长期共用的 S1/S2 checkpoint 按论文设定保存：S1 STDP 2 epoch，S2 STDP 4 epoch。中等规模或 probe 运行可以生成调试 checkpoint，但不能替代正式实验使用的共享特征层。
+
+正式的 `checkpoints/features/paper_task*_s1e2_s2e4_*.pt` 文件体积很小，可以随 git 同步到服务器；`data/preprocessed/` 和 `data/features/c2/` 体积很大，不进 git。
+
+严格持续学习实验中不要提前用未来任务训练“通用 S1/S2”。推荐流程是：Task1 后保存 MNIST 训练后的 S1/S2；Task2 阶段从这份状态继续按论文规则训练 EMNIST 的 S1/S2，然后所有 baseline/NGSG 变体共用同一份特征状态或 C2 cache 做公平对比。
+
+## 8. 实验记录模板
 
 ### 实验名称
 
@@ -189,7 +202,7 @@ Catastrophic forgetting baseline
 
 - 待填
 
-## 8. 如何判断“复现成功”
+## 9. 如何判断“复现成功”
 
 不要要求第一版完全一模一样，但至少满足下面三点：
 
@@ -200,13 +213,13 @@ Catastrophic forgetting baseline
 这里最重要的是趋势一致，比如：
 
 - catastrophic forgetting 明显差。
-- joint training 最好或接近最好。
+- joint training 当前不复现；如果后续论文对比需要，再单独补充。
 - Langevin 比无保护 baseline 更稳。
 - frozen large weights 有一定缓解但不一定最优。
 
 如果趋势都不对，就不要急着做 NGSG。
 
-## 9. 复现阶段最容易犯的错
+## 10. 复现阶段最容易犯的错
 
 ### 错误 1：一边复现一边改方法
 
@@ -228,10 +241,10 @@ Catastrophic forgetting baseline
 
 后面会非常痛苦，因为你会忘记到底哪里改过。
 
-## 10. 下一步优先级
+## 11. 下一步优先级
 
 1. 用中等规模配置确认 paper-source 路线稳定学习并产生遗忘趋势。
-2. 在服务器上用 `dev` 跑完整规模或更接近论文规模的实验。
-3. 把结果从 `experiments/` 和 `logs/` 中提炼到 `CATASTROPHIC_FORGETTING_REPRODUCTION.md`。
-4. 再补 joint training / frozen large weights / Langevin 配置。
-5. baseline 趋势可信后，再进入 winner-frequency logging 和 NGSG 实现。
+2. 先运行 `configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml`，生成可复用的 S1/S2 checkpoint 和 C2 feature cache。
+3. 在服务器或本机 GPU 上跑 catastrophic baseline 的 S3/R-STDP，确认遗忘趋势。
+4. 把结果从 `experiments/` 和 `logs/` 中提炼到 `CATASTROPHIC_FORGETTING_REPRODUCTION.md`。
+5. 暂不复现 joint training；baseline 趋势可信后，优先进入 winner-frequency logging 和 NGSG 实现。

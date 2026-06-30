@@ -22,7 +22,8 @@ data:
   num_classes: 10
   normalize: false
   subset_seed: 0
-
+  preprocess_cache: true
+  preprocess_cache_root: data/preprocessed/paper_source
 tasks:
   task_specs:
     - name: initial_mnist_digits
@@ -89,7 +90,14 @@ train:
   reset_learning_rates_each_stage: true
   progress_interval_samples: 2400
   shuffle: true
-
+  feature_checkpoint:
+    enabled: true
+    root_dir: checkpoints/features
+    load: true
+    save: true
+  c2_feature_cache:
+    enabled: true
+    root_dir: data/features/c2
 eval:
   batch_size: 1000
   measure_forgetting: true

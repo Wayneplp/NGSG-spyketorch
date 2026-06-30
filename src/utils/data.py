@@ -28,9 +28,10 @@ class TaskBundle:
 class CachedTensorDataset(Dataset[Any]):
     """Read-only dataset backed by precomputed tensor samples on disk."""
 
-    def __init__(self, cache_dir: Path, length: int) -> None:
+    def __init__(self, cache_dir: Path, length: int, feature_kind: Optional[str] = None) -> None:
         self.cache_dir = Path(cache_dir)
         self.length = int(length)
+        self.feature_kind = feature_kind
 
     def __len__(self) -> int:
         return self.length
@@ -135,7 +136,7 @@ def _describe_dataset_for_cache(dataset: Dataset[Any]) -> Dict[str, Any]:
         "type": dataset.__class__.__name__,
         "length": len(dataset),
     }
-    for attr in ("root", "split", "train"):
+    for attr in ("root", "split", "train", "cache_dir", "feature_kind"):
         if hasattr(dataset, attr):
             value = getattr(dataset, attr)
             description[attr] = str(value) if isinstance(value, Path) else value
@@ -147,6 +148,7 @@ def build_preprocessed_tensor_cache(
     cache_root: Path,
     encoder: Any,
     metadata: Mapping[str, Any],
+    feature_kind: Optional[str] = None,
 ) -> CachedTensorDataset:
     """Materialize encoded tensors once, then read them back as a dataset."""
 
@@ -187,7 +189,7 @@ def build_preprocessed_tensor_cache(
                     flush=True,
                 )
 
-    return CachedTensorDataset(cache_dir=cache_dir, length=length)
+    return CachedTensorDataset(cache_dir=cache_dir, length=length, feature_kind=feature_kind)
 
 
 def _build_transform(normalize: bool) -> transforms.Compose:

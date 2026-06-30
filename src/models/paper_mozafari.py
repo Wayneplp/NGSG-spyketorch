@@ -219,6 +219,37 @@ class PaperMozafariMNIST2018(nn.Module):
     def punish(self) -> None:
         self.anti_stdp3(self.ctx["input_spikes"], self.ctx["potentials"], self.ctx["output_spikes"], self.ctx["winners"])
 
+    def extract_s3_input(self, input: Tensor) -> Tensor:
+        """Return the pooled C2 spikes used as conv3/S3 input."""
+        if input.ndim == 3 or (input.ndim == 4 and input.shape[0] == 1):
+            input = self.encode(input.squeeze(0) if input.ndim == 4 else input)
+        input = sf.pad(input.float().to(next(self.parameters()).device), (2, 2, 2, 2), 0)
+        pot = self.conv1(input)
+        spk, _ = sf.fire(pot, self.conv1_t, True)
+        spk_in = sf.pad(sf.pooling(spk, 2, 2), (1, 1, 1, 1))
+        pot = self.conv2(spk_in)
+        spk, _ = sf.fire(pot, self.conv2_t, True)
+        return sf.pad(sf.pooling(spk, 3, 3), (2, 2, 2, 2)).detach().contiguous()
+
+    def forward_from_s3_input(self, s3_input: Tensor) -> int:
+        """Run only S3/C3/classification from a cached C2 pooled feature tensor."""
+        if s3_input.ndim == 5 and s3_input.shape[0] == 1:
+            s3_input = s3_input.squeeze(0)
+        s3_input = s3_input.float().to(next(self.parameters()).device)
+        pot = self.conv3(s3_input)
+        spk = sf.fire(pot)
+        winners = sf.get_k_winners(pot, 1, self.r3, spk)
+        self._store_context(s3_input, pot, spk, winners)
+        return self._decision_from_winners(winners)
+
+    def predict_from_s3_input(self, s3_input: Tensor) -> int:
+        was_training = self.training
+        self.eval()
+        with torch.no_grad():
+            output = int(self.forward_from_s3_input(s3_input))
+        if was_training:
+            self.train()
+        return output
     def predict_single(self, image: Tensor) -> int:
         was_training = self.training
         self.eval()
