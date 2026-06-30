@@ -33,6 +33,30 @@ C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config c
 C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config configs\baseline\catastrophic_mnist_emnist.yaml --device auto --run-name paper_ch4_catastrophic_source_seed0
 ```
 
+
+## 1.1 最新状态（2026-06-30 晚）
+
+`dev` 已推送到 `6b8a554 feat: cache paper feature layers`。当前状态：
+
+- feature-only 配置已加入：`configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml`。
+- 正式 S1/S2 checkpoint 已生成并随 git 跟踪：
+  - `checkpoints/features/paper_task1_s1e2_s2e4_f26edcfb75b5d681.pt`
+  - `checkpoints/features/paper_task2_s1e2_s2e4_60c0a06b55746fb6.pt`
+- 本地完整 feature-only 运行已确认：Task1/Task2 各 24,000 个训练样本，S1=2 epoch，S2=4 epoch，S3 被跳过。
+- C2 feature cache 已在本地生成，但体积约 46GB，不进 git；服务器首次完整运行时可重建，或后续用单独文件传输方式同步。
+- 当前不复现 joint training；近期目标是先跑 catastrophic baseline，再接 winner-frequency logging 和 NGSG。
+
+服务器拉取 `dev` 后，优先直接跑：
+
+```bash
+python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist.yaml --device cuda --run-name paper_ch4_catastrophic_source_seed0
+```
+
+只有在 checkpoint 缺失或需要重建时，才跑：
+
+```bash
+python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml --device cuda --run-name paper_feature_checkpoint_full
+```
 ## 2. 复现目标
 
 当前复现目标不是“立刻做出 NGSG”，而是分成两个阶段。
@@ -108,9 +132,8 @@ Task 1 先训练 MNIST，Task 2 再继续在同一网络上训练 EMNIST letters
 - `configs/baseline/catastrophic_mnist_emnist.yaml`
 - `configs/baseline/catastrophic_mnist_emnist_paper_medium.yaml`
 
-后续再补齐：
+后续如论文对比需要再补齐：
 
-- `configs/baseline/joint_training.yaml`
 - `configs/baseline/frozen_large_weights.yaml`
 - `configs/baseline/langevin.yaml`
 
@@ -243,8 +266,8 @@ Catastrophic forgetting baseline
 
 ## 11. 下一步优先级
 
-1. 用中等规模配置确认 paper-source 路线稳定学习并产生遗忘趋势。
-2. 先运行 `configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml`，生成可复用的 S1/S2 checkpoint 和 C2 feature cache。
-3. 在服务器或本机 GPU 上跑 catastrophic baseline 的 S3/R-STDP，确认遗忘趋势。
+1. 服务器 `git pull origin dev`，确认已有两份 `paper_task*_s1e2_s2e4_*.pt` checkpoint。
+2. 直接运行 `configs/baseline/catastrophic_mnist_emnist.yaml`，复用 S1/S2 checkpoint，并在服务器本地生成/复用 C2 cache。
+3. 跑完后记录 Task1 after Task1、Task1 after Task2、Task2 after Task2 和 forgetting。
 4. 把结果从 `experiments/` 和 `logs/` 中提炼到 `CATASTROPHIC_FORGETTING_REPRODUCTION.md`。
 5. 暂不复现 joint training；baseline 趋势可信后，优先进入 winner-frequency logging 和 NGSG 实现。

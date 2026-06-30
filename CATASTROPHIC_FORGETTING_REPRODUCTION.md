@@ -2,8 +2,54 @@
 
 最后更新：2026-06-30
 
-本次补充：codex/server-preprocess-cache 的共享 infra 已并入 dev；paper-source 预处理缓存、EMNIST raw idx fallback 和训练进度日志已成为当前主线能力。
+本次补充：S1/S2 feature checkpoint 和 C2 feature cache 流程已落地；正式 S1=2/S2=4 checkpoint 已生成并随 `dev` 推送到 GitHub。
 
+
+## 2026-06-30 晚更新：S1/S2 checkpoint 已生成并推送
+
+当前 `dev` 最新提交：`6b8a554 feat: cache paper feature layers`。
+
+已经完成的本地 feature-only 运行：
+
+- 运行名：`paper_feature_checkpoint_full`
+- 配置：`configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml`
+- 设备：CUDA
+- Task1 MNIST：24,000 个训练样本，S1 2 epoch，S2 4 epoch
+- Task2 EMNIST：24,000 个训练样本，S1 2 epoch，S2 4 epoch
+- S3：跳过，`output_training.skipped = feature_only`
+
+已随 git 跟踪并推送的小 checkpoint：
+
+```text
+checkpoints/features/paper_task1_s1e2_s2e4_f26edcfb75b5d681.pt
+checkpoints/features/paper_task2_s1e2_s2e4_60c0a06b55746fb6.pt
+```
+
+本地已生成但不进 git 的大缓存：
+
+```text
+data/preprocessed/paper_source/e40948d119942523 -> 24000 个 .pt
+data/preprocessed/paper_source/a390cd0731f5a594 -> 24000 个 .pt
+data/features/c2/7ea7511c03cbf772 -> 24000 个 .pt
+data/features/c2/8d3b69701aacd0b0 -> 24000 个 .pt
+```
+
+`data/features/c2` 两个正式目录合计约 46GB，因此不通过 git 同步。服务器端拉取 `dev` 后可以直接获得 S1/S2 checkpoint；首次跑完整 baseline 时会在服务器本地重建 C2 cache，之后可重复使用。
+
+服务器当前推荐命令：
+
+```bash
+git fetch origin
+git checkout dev
+git pull origin dev
+python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist.yaml --device cuda --run-name paper_ch4_catastrophic_source_seed0
+```
+
+只有当 checkpoint 缺失或需要重建时，才运行 feature-only 配置：
+
+```bash
+python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml --device cuda --run-name paper_feature_checkpoint_full
+```
 ## 2026-06-30 更新：缓存与服务器分支整理
 
 `origin/codex/server-preprocess-cache` 上的共享 infra 已合并进 `dev`。之后本地和服务器都应优先跟 `dev` 跑，不再把 `codex/server-preprocess-cache` 当作长期实验分支维护。

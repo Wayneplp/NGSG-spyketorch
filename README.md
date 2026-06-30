@@ -15,6 +15,15 @@ Current mainline status, 2026-06-30:
 - The server-side preprocessing cache and EMNIST raw idx fallback have been merged into `dev`.
 - Server runtime notes such as `SERVER_LATEST_STATUS.md` are local-only and should not be committed.
 
+Current latest status after commit `6b8a554`:
+
+- `dev` contains the feature-cache implementation and the reusable paper-source S1/S2 checkpoints.
+- The tracked checkpoints are:
+  - `checkpoints/features/paper_task1_s1e2_s2e4_f26edcfb75b5d681.pt`
+  - `checkpoints/features/paper_task2_s1e2_s2e4_60c0a06b55746fb6.pt`
+- These checkpoint files were built with the full paper-aligned feature schedule: S1 STDP 2 epochs and S2 STDP 4 epochs on 24,000 samples per task.
+- `data/preprocessed/` and `data/features/c2/` are still local/server runtime caches and are not tracked in git.
+- The next server run should usually use `configs/baseline/catastrophic_mnist_emnist.yaml`; use `configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml` only if the tracked checkpoints are missing or need to be regenerated.
 Recommended workflow:
 
 1. Keep shared infrastructure on `dev`.
@@ -111,6 +120,20 @@ The long-lived feature checkpoint should use the paper-aligned feature schedule:
 Use `configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml` to build these reusable artifacts without running S3 R-STDP or evaluation.
 
 The full `S1=2/S2=4` `checkpoints/features/paper_task*_s1e2_s2e4_*.pt` files are small and tracked in git for server reuse. The larger `data/preprocessed/` and `data/features/c2/` caches stay out of git; rebuild them on the server or transfer them separately.
+
+
+### Current Server Command
+
+After pulling `dev`, the server should already have the small S1/S2 checkpoints from git. Run the full catastrophic baseline like this:
+
+```bash
+git fetch origin
+git checkout dev
+git pull origin dev
+python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist.yaml --device cuda --run-name paper_ch4_catastrophic_source_seed0
+```
+
+The first server run may still materialize `data/preprocessed/paper_source/` and `data/features/c2/`; later runs can reuse them locally.
 
 ## Documentation Map
 
