@@ -2,12 +2,21 @@
 
 最后更新：2026-06-30
 
-本次补充：S1/S2 feature checkpoint 和 C2 feature cache 流程已落地；正式 S1=2/S2=4 checkpoint 已生成并随 `dev` 推送到 GitHub。
+本次补充：S1/S2 feature checkpoint 和 C2 feature cache 流程已落地；正式 S1=2/S2=4 checkpoint 已生成并随 `dev` 推送到 GitHub；active baseline YAML 已收敛为 3 个。
 
 
+## 2026-06-30 晚更新：active baseline YAML 收敛
+
+`configs/baseline/` 当前只保留 3 个 active YAML：
+
+- `catastrophic_mnist_emnist.yaml`：服务器正式完整 catastrophic baseline。
+- `catastrophic_mnist_emnist_feature_checkpoint.yaml`：仅用于重建 S1/S2 checkpoint 和 C2 cache。
+- `catastrophic_mnist_emnist_paper_medium.yaml`：本地中等规模诊断。
+
+旧的 toy/probe/stabilizer/frozen/Langevin/joint-training YAML 已删除；本文件后面的旧命令只作为历史实验记录，不再代表当前推荐入口。当前不复现 joint training。
 ## 2026-06-30 晚更新：S1/S2 checkpoint 已生成并推送
 
-当前 `dev` 最新提交：`6b8a554 feat: cache paper feature layers`。
+当前 `dev` 已包含 feature-cache implementation、正式 S1/S2 checkpoint 和 active config 收敛说明。
 
 已经完成的本地 feature-only 运行：
 

@@ -15,7 +15,7 @@ Current mainline status, 2026-06-30:
 - The server-side preprocessing cache and EMNIST raw idx fallback have been merged into `dev`.
 - Server runtime notes such as `SERVER_LATEST_STATUS.md` are local-only and should not be committed.
 
-Current latest status after commit `6b8a554`:
+Current latest status:
 
 - `dev` contains the feature-cache implementation and the reusable paper-source S1/S2 checkpoints.
 - The tracked checkpoints are:
@@ -23,7 +23,7 @@ Current latest status after commit `6b8a554`:
   - `checkpoints/features/paper_task2_s1e2_s2e4_60c0a06b55746fb6.pt`
 - These checkpoint files were built with the full paper-aligned feature schedule: S1 STDP 2 epochs and S2 STDP 4 epochs on 24,000 samples per task.
 - `data/preprocessed/` and `data/features/c2/` are still local/server runtime caches and are not tracked in git.
-- The next server run should usually use `configs/baseline/catastrophic_mnist_emnist.yaml`; use `configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml` only if the tracked checkpoints are missing or need to be regenerated.
+- The next server run should usually use `configs/baseline/catastrophic_mnist_emnist.yaml`; use `configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml` only if the tracked checkpoints are missing or need to be regenerated. See `configs/baseline/README.md` for the active config guide.
 Recommended workflow:
 
 1. Keep shared infrastructure on `dev`.
@@ -60,7 +60,7 @@ What is intentionally not kept in git:
 - preprocessed `.pt` cache files under `data/preprocessed/`
 - per-run outputs under `experiments/`
 - raw logs under `logs/`
-- saved checkpoints under `checkpoints/`
+- generated checkpoints under `checkpoints/`, except the small reusable S1/S2 feature checkpoints in `checkpoints/features/`
 - aggregated generated results under `results/`
 - server runtime snapshots such as `SERVER_LATEST_STATUS.md`
 
@@ -137,6 +137,7 @@ The first server run may still materialize `data/preprocessed/paper_source/` and
 
 ## Documentation Map
 
+- Active baseline config guide: `configs/baseline/README.md`
 - Baseline reproduction plan: `REPRODUCTION_PLAN.md`
 - Catastrophic forgetting status and experiment log: `CATASTROPHIC_FORGETTING_REPRODUCTION.md`
 - NGSG design notes: `NGSG_SNN_Implementation.md`

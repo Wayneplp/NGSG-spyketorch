@@ -14,7 +14,9 @@
 
 - 主集成分支是 `dev`，服务器也应跟 `dev` 或 `dev` 上的 release tag。
 - `baseline/continuous-learning` 用于 baseline 复现，`ngsg/novelty-gated-growth` 用于 NGSG 创新实现。
+- `configs/baseline/README.md` 说明当前 3 个 active baseline YAML 应该分别什么时候跑。
 - `configs/baseline/catastrophic_mnist_emnist.yaml` 是完整规模 paper-source catastrophic baseline 配置。
+- `configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml` 只用于重建 S1/S2 checkpoint 和 C2 cache。
 - `configs/baseline/catastrophic_mnist_emnist_paper_medium.yaml` 是中等规模诊断配置。
 - `src/trainers/baseline_trainer.py` 中的 `paper_spyketorch` / `paper_source_rstdp` 路线是当前主复现路径。
 - `src/utils/data.py` 已包含 paper-source 预处理缓存和 EMNIST raw idx fallback。
@@ -127,15 +129,13 @@ Task 1 先训练 MNIST，Task 2 再继续在同一网络上训练 EMNIST letters
 
 ### 配置文件
 
-当前优先维护：
+当前只保留 3 个 active baseline YAML，具体选择见 `configs/baseline/README.md`：
 
-- `configs/baseline/catastrophic_mnist_emnist.yaml`
-- `configs/baseline/catastrophic_mnist_emnist_paper_medium.yaml`
+- `configs/baseline/catastrophic_mnist_emnist.yaml`：服务器正式完整 catastrophic baseline。
+- `configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml`：仅用于重建 S1/S2 checkpoint 和 C2 cache。
+- `configs/baseline/catastrophic_mnist_emnist_paper_medium.yaml`：本地中等规模诊断，不作为最终数字。
 
-后续如论文对比需要再补齐：
-
-- `configs/baseline/frozen_large_weights.yaml`
-- `configs/baseline/langevin.yaml`
+旧的 toy/probe/stabilizer/frozen/Langevin/joint-training YAML 已从 active config tree 删除。当前不复现 joint training；frozen/Langevin 只有在论文对比确实需要时再重新建配置。
 
 ### 训练脚本
 
