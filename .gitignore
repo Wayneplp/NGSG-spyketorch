@@ -12,6 +12,7 @@ env/
 .DS_Store
 .vscode/
 .idea/
+SERVER_LATEST_STATUS.md
 
 # Experiment artifacts generated locally
 logs/
