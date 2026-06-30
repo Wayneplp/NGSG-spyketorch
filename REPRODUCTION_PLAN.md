@@ -8,11 +8,34 @@
 
 > 先严格复现原论文 baseline，不要一开始就改模型；先证明原方法能跑通，再开始加自己的东西。
 
----
+## 1. 当前代码状态（2026-06-30）
 
-## 1. 复现目标
+当前主线已经从早期近似实现切到论文作者源码风格的 SpykeTorch 移植路线：
 
-当前复现目标不是“立刻做出 NGSG”，而是分成两个阶段：
+- 主集成分支是 `dev`，服务器也应跟 `dev` 或 `dev` 上的 release tag。
+- `baseline/continuous-learning` 用于 baseline 复现，`ngsg/novelty-gated-growth` 用于 NGSG 创新实现。
+- `configs/baseline/catastrophic_mnist_emnist.yaml` 是完整规模 paper-source catastrophic baseline 配置。
+- `configs/baseline/catastrophic_mnist_emnist_paper_medium.yaml` 是中等规模诊断配置。
+- `src/trainers/baseline_trainer.py` 中的 `paper_spyketorch` / `paper_source_rstdp` 路线是当前主复现路径。
+- `src/utils/data.py` 已包含 paper-source 预处理缓存和 EMNIST raw idx fallback。
+- `SERVER_LATEST_STATUS.md`、`data/`、`logs/`、`checkpoints/`、`experiments/`、预处理 `.pt` 缓存都不进 git。
+
+当前可以直接使用的命令：
+
+```powershell
+# 只检查配置和任务规模，不训练
+C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config configs\baseline\catastrophic_mnist_emnist.yaml --device auto --dry-run --run-name paper_source_strict_dryrun
+
+# 中等规模源码移植版，用来先看学习曲线
+C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config configs\baseline\catastrophic_mnist_emnist_paper_medium.yaml --device auto --run-name paper_medium_source_port_seed0
+
+# 完整论文规模，极慢，确认中等规模趋势正常后再跑
+C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config configs\baseline\catastrophic_mnist_emnist.yaml --device auto --run-name paper_ch4_catastrophic_source_seed0
+```
+
+## 2. 复现目标
+
+当前复现目标不是“立刻做出 NGSG”，而是分成两个阶段。
 
 ### 阶段 A：原论文复现
 
@@ -29,256 +52,93 @@
 
 等阶段 A 跑通以后，再逐步加入：
 
-- winner frequency 统计
+- winner-frequency 统计
 - reserve neuron 发现
 - novelty score
-- reserve branch
+- neuron partition / reserve growth branch
 - silent synapse growth
 
----
+## 3. 复现记录必须写清楚什么
 
-## 2. 你现在到底要“写”什么
-
-如果你现在是准备动手复现，那你真正要写的不是论文正文，而是下面四类东西：
-
-### 2.1 复现实验说明
-
-要写清楚：
-
-- 原论文用了什么任务设置；
-- 每个 baseline 的核心机制是什么；
-- 我们当前代码里准备怎么对应实现；
-- 哪些地方已经完全一致；
-- 哪些地方暂时只能近似实现。
-
-### 2.2 复现代码入口
-
-要写清楚：
-
-- 哪个脚本负责训练 baseline；
-- 哪个脚本负责测试；
-- 哪个配置文件对应哪个方法；
-- 训练输出存到哪里。
-
-### 2.3 复现记录表
-
-要写清楚：
-
-- 哪次实验用了什么配置；
-- 是否成功跑通；
-- 准确率是多少；
-- 和论文结果差多少；
-- 可能误差来源是什么。
-
-### 2.4 偏差说明
-
-只要有任意一个地方和原论文不完全一致，就要记录：
+每个 baseline 或诊断实验至少记录：
 
 - 原论文设定
-- 当前实现设定
-- 差异
-- 可能影响
-
-这个非常重要，因为以后写论文 related work 或 experiment 时，你会反复用到。
-
----
-
-## 3. 最推荐的复现顺序
-
-不要同时复现所有东西。建议按下面顺序做。
-
-### Step 1：确认原论文实验最小闭环
-
-先从论文里抽出最小闭环：
-
-1. 用了什么数据集
-2. 任务是怎么分的
-3. 网络结构是什么
-4. 学习规则是什么
-5. baseline 有哪些
-6. 指标是什么
-
-你先不要纠结所有细节，先把这 6 个问题单独写出来。
-
-### Step 2：先跑最简单 baseline
-
-第一个应该先做：
-
-- catastrophic forgetting baseline
-
-原因：
-
-- 它最简单；
-- 最容易验证数据流、训练流和测试流是否正确；
-- 如果这个都跑不通，后面的 Langevin 也没法做。
-
-### Step 3：再做 joint training
-
-然后做：
-
-- joint training
-
-原因：
-
-- 它相当于理想上界；
-- 可以帮助判断数据、标签、评估流程是不是有问题。
-
-### Step 4：再做 frozen large weights
-
-这是保护式方法里相对更直接的一种。
-
-### Step 5：最后做 Langevin dynamics
-
-Langevin 是你后面要重点对比的强 baseline，所以要最后认真做、认真对齐。
-
----
-
-## 4. 复现时每个 baseline 应该怎么写
-
-后面无论是写代码说明、实验日志还是论文实验部分，都建议按同一个模板写。
-
-模板如下。
-
-### 4.1 方法名
-
-例如：
-
-`Catastrophic Forgetting Baseline`
-
-### 4.2 它在原论文里的作用
-
-例如：
-
-用于展示在没有保护机制时，旧任务性能会因新任务训练而明显下降。
-
-### 4.3 当前实现方式
-
-例如：
-
-Task 1 正常训练，Task 2 继续在同一网络上训练，不加入额外保护项，不冻结参数，不引入额外容量。
-
-### 4.4 关键配置
-
-例如：
-
-- 数据集
-- S1/S2/S3 结构
-- 学习率或 R-STDP 参数
-- 训练 epoch
-- 任务顺序
-
-### 4.5 输出指标
-
+- 当前配置文件
+- 当前实现路径
+- 和原论文仍不一致的地方
+- 训练命令
+- 结果文件位置
 - Task1 after Task1
 - Task1 after Task2
 - Task2 after Task2
 - Forgetting
 - Avg Acc
+- 当前判断和下一步
 
-### 4.6 和原论文结果对比
+只要有任意一个地方和原论文不完全一致，就要登记偏差，因为后面写论文 related work、experiment 和 limitation 时会反复用到。
 
-- 原论文结果
-- 当前结果
-- 差异
-- 可能原因
+## 4. 推荐复现顺序
 
----
+1. catastrophic forgetting baseline
+2. joint training
+3. frozen large weights
+4. Langevin dynamics
+5. winner-frequency logging, only after the paper-source baseline is trusted
+6. NGSG growth logic, only after baseline behavior is stable
 
-## 5. 你在代码仓库里应该怎么对应落地
+catastrophic forgetting baseline 仍然是第一优先级，因为它最容易验证数据流、训练流和测试流是否正确。如果它都不稳定，后面的保护机制和 NGSG 对比没有意义。
 
-推荐这样对应：
+## 5. 当前 catastrophic baseline 实现方式
 
-### 5.1 配置文件
+Task 1 先训练 MNIST，Task 2 再继续在同一网络上训练 EMNIST letters，不加入额外保护项，不冻结参数，不引入额外容量。
 
-放在：
+当前 paper-source 路线的关键点：
 
-- `configs/baseline/catastrophic.yaml`
+- 输入预处理：DoG filter、local normalization、Intensity2Latency。
+- S1/S2：SpykeTorch convolution + STDP。
+- S3：SpykeTorch convolution + reward / anti-reward STDP。
+- 输出映射：200 个 S3 feature map，每类 20 个。
+- EMNIST：优先 torchvision，必要时从 raw idx / idx.gz 文件直接读取。
+- 预处理缓存：写入 `data/preprocessed/paper_source/<hash>/`，避免服务器长跑时重复做昂贵预处理。
+
+## 6. 代码仓库落地方式
+
+### 配置文件
+
+当前优先维护：
+
+- `configs/baseline/catastrophic_mnist_emnist.yaml`
+- `configs/baseline/catastrophic_mnist_emnist_paper_medium.yaml`
+
+后续再补齐：
+
 - `configs/baseline/joint_training.yaml`
 - `configs/baseline/frozen_large_weights.yaml`
 - `configs/baseline/langevin.yaml`
 
-每个配置文件至少写清楚：
+### 训练脚本
 
-- 数据集
-- 任务设置
-- 网络参数
-- 训练参数
-- 评估参数
-- 输出目录
-
-### 5.2 训练脚本
-
-放在：
+统一入口：
 
 - `scripts/run_baseline.py`
 
-建议这个脚本先只做一件事：
+这个脚本负责读取配置、运行 baseline、保存日志和结果。
 
-> 读取配置，跑指定 baseline，然后保存日志和结果。
+### 结果汇总
 
-### 5.3 结果汇总
-
-放在：
+生成结果可以放在本地：
 
 - `results/baseline_summary.csv`
+- `experiments/<run_name>/result.json`
+- `logs/<run_name>.log`
 
-建议字段包括：
+这些是运行产物，默认不进 git。需要写入论文或长期保留的信息，应转写到 Markdown 文档或最终表格中。
 
-- method
-- seed
-- task1_after_task1
-- task1_after_task2
-- task2_after_task2
-- forgetting
-- avg_acc
-- notes
-
-### 5.4 每次实验的单独记录
-
-放在：
-
-- `experiments/exp001_baseline_reproduce/`
-
-里面可以放：
-
-- `plan.md`
-- `run_log.md`
-- 导出的图
-- 对应结果表
-
----
-
-## 6. 第一阶段你应该先写哪些文件
-
-如果现在马上开始，建议第一批只写下面这些：
-
-### 在代码仓库里
-
-- `configs/baseline/catastrophic.yaml`
-- `configs/baseline/joint_training.yaml`
-- `configs/baseline/frozen_large_weights.yaml`
-- `configs/baseline/langevin.yaml`
-- `scripts/run_baseline.py`
-- `experiments/exp001_baseline_reproduce/run_log.md`
-
-### 在论文仓库里
-
-- 更新 `NGSG_framework_and_log.md`
-- 把 baseline 跑通情况填进实验总表
-
----
-
-## 7. 复现记录应该怎么写
-
-下面这个模板你可以直接照着填。
-
-## 实验记录模板
+## 7. 实验记录模板
 
 ### 实验名称
 
-例如：
-
-`exp001_catastrophic_baseline_seed0`
+`paper_medium_source_port_seed0`
 
 ### 目标
 
@@ -290,13 +150,15 @@ Catastrophic forgetting baseline
 
 ### 当前实现说明
 
-- Task 1 先训练
-- Task 2 再继续训练
-- 不加参数保护
-- 不加额外容量
+- Task 1 先训练 MNIST。
+- Task 2 再继续训练 EMNIST letters。
+- 不加参数保护。
+- 不加额外容量。
+- 使用 paper-source SpykeTorch 移植路线。
 
 ### 配置
 
+- 配置文件：待填
 - 数据集：待填
 - 任务划分：待填
 - 网络结构：待填
@@ -316,6 +178,7 @@ Catastrophic forgetting baseline
 - 原论文：待填
 - 当前结果：待填
 - 差异：待填
+- 可能原因：待填
 
 ### 当前判断
 
@@ -326,32 +189,28 @@ Catastrophic forgetting baseline
 
 - 待填
 
----
-
 ## 8. 如何判断“复现成功”
 
 不要要求第一版完全一模一样，但至少满足下面三点：
 
-1. 训练和测试流程完整跑通；
-2. 结果趋势与原论文一致；
+1. 训练和测试流程完整跑通。
+2. 结果趋势与原论文一致。
 3. 数值误差在可解释范围内。
 
-这里最重要的是“趋势一致”，比如：
+这里最重要的是趋势一致，比如：
 
-- catastrophic forgetting 明显差；
-- joint training 最好或接近最好；
-- Langevin 比无保护 baseline 更稳；
+- catastrophic forgetting 明显差。
+- joint training 最好或接近最好。
+- Langevin 比无保护 baseline 更稳。
 - frozen large weights 有一定缓解但不一定最优。
 
 如果趋势都不对，就不要急着做 NGSG。
-
----
 
 ## 9. 复现阶段最容易犯的错
 
 ### 错误 1：一边复现一边改方法
 
-这会导致你最后根本不知道结果来自原方法还是你自己的改动。
+这会导致你最后根本不知道结果来自原方法还是自己的改动。
 
 ### 错误 2：没有记录配置
 
@@ -361,44 +220,18 @@ Catastrophic forgetting baseline
 
 持续学习最重要的是：
 
-- Task 1 学完时怎样
-- Task 2 学完后旧任务掉了多少
-- 新任务是否学会了
+- Task 1 学完时怎样。
+- Task 2 学完后旧任务掉了多少。
+- 新任务是否学会了。
 
 ### 错误 4：原论文和当前实现不一致但没有登记
 
 后面会非常痛苦，因为你会忘记到底哪里改过。
 
----
+## 10. 下一步优先级
 
-## 10. 对你当前任务的最直接建议
-
-你现在不要先写 NGSG 代码。
-
-你现在应该先写的是：
-
-1. baseline 配置文件
-2. baseline 统一训练入口
-3. 第一份复现实验日志
-
-也就是说，当前最合理的实际动作是：
-
-> 先把原论文的四个 baseline 在你的代码仓库里组织出来，形成一个干净、可重复运行的 baseline 框架。
-
-等这个框架稳定之后，再开始加 winner frequency 统计。
-
----
-
-## 11. 你下一步可以直接做什么
-
-最推荐的顺序：
-
-1. 先把原论文 baseline 名单定死
-2. 给每个 baseline 建一个 config 文件
-3. 写一个统一的 `run_baseline.py`
-4. 先跑 catastrophic baseline
-5. 再跑 joint training
-6. 再补 frozen 和 Langevin
-7. 跑通后再做 winner frequency logging
-
-如果你愿意，下一步我可以直接继续帮你把这些“第一批该写的空文件”也生成出来。
+1. 用中等规模配置确认 paper-source 路线稳定学习并产生遗忘趋势。
+2. 在服务器上用 `dev` 跑完整规模或更接近论文规模的实验。
+3. 把结果从 `experiments/` 和 `logs/` 中提炼到 `CATASTROPHIC_FORGETTING_REPRODUCTION.md`。
+4. 再补 joint training / frozen large weights / Langevin 配置。
+5. baseline 趋势可信后，再进入 winner-frequency logging 和 NGSG 实现。

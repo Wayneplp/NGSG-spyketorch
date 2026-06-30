@@ -1,9 +1,35 @@
 # 灾难性遗忘复现状态记录
 
-最后更新：2026-06-29
+最后更新：2026-06-30
 
-本次补充：已暂停正在运行的中等规模实验，并把主 catastrophic baseline 切换为论文作者源码 dmitryanton68/continuous_learning 的 SpykeTorch 移植版。
+本次补充：codex/server-preprocess-cache 的共享 infra 已并入 dev；paper-source 预处理缓存、EMNIST raw idx fallback 和训练进度日志已成为当前主线能力。
 
+## 2026-06-30 更新：缓存与服务器分支整理
+
+`origin/codex/server-preprocess-cache` 上的共享 infra 已合并进 `dev`。之后本地和服务器都应优先跟 `dev` 跑，不再把 `codex/server-preprocess-cache` 当作长期实验分支维护。
+
+本次进入 `dev` 的关键改动：
+
+- paper-source 路线增加离线预处理缓存，缓存目录为 `data/preprocessed/paper_source/<hash>/`。
+- 训练日志增加 epoch 级进度输出，长跑时更容易判断是否仍在推进。
+- EMNIST letters 在服务器上如果经由 `torchvision.datasets.EMNIST(split="letters")` 初始化失败，会从 `data/emnist/EMNIST/raw/gzip/` 下的 raw idx / idx.gz 文件直接读取。
+- `SERVER_LATEST_STATUS.md` 被明确视为服务器运行时快照，不再进入 git；需要长期保留的信息应整理进本文档或 README。
+
+服务器更新代码时建议：
+
+```bash
+git fetch origin
+git checkout dev
+git pull origin dev
+pip install -r requirements.txt
+```
+
+缓存进度检查示例：
+
+```bash
+find data/preprocessed/paper_source -name '*.pt' | wc -l
+tail -n 50 logs/preprocess_*.log
+```
 
 ## 2026-06-29 最新更新：暂停运行并移植论文源码
 
@@ -46,7 +72,7 @@ C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config c
 C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config configs\baseline\catastrophic_mnist_emnist.yaml --device auto --run-name paper_ch4_catastrophic_source_seed0
 ```
 
-仍需注意：当前移植已经按作者源码结构对齐，但 torchvision 的 EMNIST letters 读取、方向修正和作者仓库里预处理好的张量文件可能仍有细微差异。后续如果要追到论文表格数值，需要继续核对作者仓库里的数据保存格式和 notebook 中实际加载的 `.pt` 文件来源。
+仍需注意：当前移植已经按作者源码结构对齐，并已加入 EMNIST raw idx fallback 来绕过服务器上 `torchvision.datasets.EMNIST(split="letters")` 初始化不稳定的问题。不过 EMNIST 方向修正、作者仓库里预处理好的张量文件来源、以及 notebook 中实际加载的 `.pt` 文件格式仍可能带来细微差异。后续如果要追到论文表格数值，需要继续核对这些数据保存与加载细节。
 
 ## 2026-06-29 中等规模论文源码移植版运行结果
 
