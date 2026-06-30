@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 import random
@@ -17,6 +20,103 @@ class TaskBundle:
     label_set: List[int]
     train_dataset: Dataset[Any]
     test_dataset: Dataset[Any]
+
+
+class CachedTensorDataset(Dataset[Any]):
+    """Read-only dataset backed by precomputed tensor samples on disk."""
+
+    def __init__(self, cache_dir: Path, length: int) -> None:
+        self.cache_dir = Path(cache_dir)
+        self.length = int(length)
+
+    def __len__(self) -> int:
+        return self.length
+
+    def __getitem__(self, index: int) -> Any:
+        payload = torch.load(self.cache_dir / f"{index:06d}.pt", map_location="cpu")
+        return payload["input"], int(payload["target"])
+
+
+def _hash_jsonable(payload: Any) -> str:
+    rendered = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(rendered.encode("utf-8")).hexdigest()
+
+
+def _describe_dataset_for_cache(dataset: Dataset[Any]) -> Dict[str, Any]:
+    if isinstance(dataset, MappedSubset):
+        return {
+            "type": "MappedSubset",
+            "length": len(dataset),
+            "indices_hash": _hash_jsonable(dataset.indices),
+            "label_mapping": dict(sorted(dataset.label_mapping.items())),
+            "base": _describe_dataset_for_cache(dataset.dataset),
+        }
+
+    if isinstance(dataset, Subset):
+        return {
+            "type": "Subset",
+            "length": len(dataset),
+            "indices_hash": _hash_jsonable(list(dataset.indices)),
+            "base": _describe_dataset_for_cache(dataset.dataset),
+        }
+
+    description: Dict[str, Any] = {
+        "type": dataset.__class__.__name__,
+        "length": len(dataset),
+    }
+    for attr in ("root", "split", "train"):
+        if hasattr(dataset, attr):
+            value = getattr(dataset, attr)
+            description[attr] = str(value) if isinstance(value, Path) else value
+    return description
+
+
+def build_preprocessed_tensor_cache(
+    dataset: Dataset[Any],
+    cache_root: Path,
+    encoder: Any,
+    metadata: Mapping[str, Any],
+) -> CachedTensorDataset:
+    """Materialize encoded tensors once, then read them back as a dataset."""
+
+    cache_payload = {
+        "version": 1,
+        "metadata": dict(metadata),
+        "dataset": _describe_dataset_for_cache(dataset),
+    }
+    fingerprint = _hash_jsonable(cache_payload)[:16]
+    cache_dir = Path(cache_root) / fingerprint
+    metadata_path = cache_dir / "metadata.json"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    if not metadata_path.exists():
+        metadata_path.write_text(json.dumps(cache_payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    length = len(dataset)
+    missing = [idx for idx in range(length) if not (cache_dir / f"{idx:06d}.pt").exists()]
+    if missing:
+        print(
+            f"[cache] materializing {len(missing)}/{length} samples into {cache_dir}",
+            flush=True,
+        )
+        for position, sample_idx in enumerate(missing, start=1):
+            image, target = dataset[sample_idx]
+            encoded = encoder(image)
+            payload = {
+                "input": encoded.detach().cpu().contiguous(),
+                "target": int(target),
+            }
+            target_path = cache_dir / f"{sample_idx:06d}.pt"
+            tmp_path = cache_dir / f".{sample_idx:06d}.{os.getpid()}.tmp"
+            torch.save(payload, tmp_path)
+            os.replace(tmp_path, target_path)
+            if position % 500 == 0 or position == len(missing):
+                print(
+                    f"[cache] saved {position}/{len(missing)} samples into {cache_dir.name}",
+                    flush=True,
+                )
+
+    return CachedTensorDataset(cache_dir=cache_dir, length=length)
 
 
 def _build_transform(normalize: bool) -> transforms.Compose:

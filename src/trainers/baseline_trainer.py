@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import import_module
+from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 import torch
@@ -14,6 +15,7 @@ from src.plasticity import SpykeTorchRSTDPConfig, SpykeTorchRewardSTDP
 from src.utils.data import (
     ConcatenatedSubset,
     TaskBundle,
+    build_preprocessed_tensor_cache,
     build_dataloader,
     build_task_bundles,
     bundle_summary,
@@ -56,6 +58,8 @@ class BaselineTrainer:
 
         task1, task2 = task_bundles[0], task_bundles[1]
         model = self.build_model(config).to(device)
+        if getattr(model, "paper_source_compatible", False):
+            task1, task2 = self.prepare_paper_source_cache(task1, task2, config, model)
         rstdp = None if getattr(model, "paper_source_compatible", False) else self.build_output_rstdp(model, config).to(device)
 
         train_task1_loader = self.build_train_loader(task1.train_dataset, config)
@@ -170,6 +174,57 @@ class BaselineTrainer:
         config: Mapping[str, Any],
     ) -> Any:
         return self.build_train_loader(task2.train_dataset, config)
+
+    def prepare_paper_source_cache(
+        self,
+        task1: TaskBundle,
+        task2: TaskBundle,
+        config: Mapping[str, Any],
+        model: nn.Module,
+    ) -> tuple[TaskBundle, TaskBundle]:
+        data_cfg = config.get("data", {})
+        if not bool(data_cfg.get("preprocess_cache", True)):
+            return task1, task2
+
+        cache_root = Path(str(data_cfg.get("preprocess_cache_root", "data/preprocessed/paper_source")))
+        model_cfg = config.get("model", {})
+        preprocess_meta = {
+            "implementation": "paper_source_encode_v1",
+            "dataset_name": data_cfg.get("dataset_name"),
+            "input_size": data_cfg.get("input_size"),
+            "input_channels": data_cfg.get("input_channels"),
+            "time_steps": model_cfg.get("time_steps"),
+            "filter_threshold": model_cfg.get("filter_threshold"),
+            "local_normalization_radius": model_cfg.get("local_normalization_radius"),
+        }
+
+        def wrap_dataset(bundle: TaskBundle, split_name: str, dataset: Any) -> Any:
+            return build_preprocessed_tensor_cache(
+                dataset=dataset,
+                cache_root=cache_root,
+                encoder=model.encode,
+                metadata={
+                    **preprocess_meta,
+                    "task_name": bundle.name,
+                    "split": split_name,
+                    "labels": bundle.label_set,
+                },
+            )
+
+        return (
+            TaskBundle(
+                name=task1.name,
+                label_set=task1.label_set,
+                train_dataset=wrap_dataset(task1, "train", task1.train_dataset),
+                test_dataset=wrap_dataset(task1, "test", task1.test_dataset),
+            ),
+            TaskBundle(
+                name=task2.name,
+                label_set=task2.label_set,
+                train_dataset=wrap_dataset(task2, "train", task2.train_dataset),
+                test_dataset=wrap_dataset(task2, "test", task2.test_dataset),
+            ),
+        )
 
     def train_single_task(
         self,
