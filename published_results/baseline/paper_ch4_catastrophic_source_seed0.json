@@ -1,0 +1,273 @@
+{
+  "run_name": "paper_ch4_catastrophic_source_seed0",
+  "method": "catastrophic",
+  "seed": 0,
+  "source_commit": "2928f7e",
+  "server_run_dir": "/root/autodl-tmp/NGSG-spyketorch-dev-2928f7e",
+  "server_result_json": "/root/autodl-tmp/NGSG-spyketorch-dev-2928f7e/experiments/paper_ch4_catastrophic_source_seed0/result.json",
+  "local_raw_copy": "experiments/server_paper_ch4_catastrophic_source_seed0/result.json",
+  "config": "configs/baseline/catastrophic_mnist_emnist.yaml",
+  "metrics": {
+    "task1_after_task1": 0.9314,
+    "task1_after_task2": 0.4754,
+    "task2_after_task2": 0.75425,
+    "forgetting": 0.456,
+    "avg_acc": 0.614825
+  },
+  "paper_catastrophic_forgetting_reference": {
+    "task1_after_task1_initial_mnist": 0.908,
+    "task1_after_task2_subsequent_mnist": 0.481,
+    "task2_after_task2_subsequent_emnist": 0.784
+  },
+  "task_summary": [
+    {
+      "name": "initial_mnist_digits",
+      "labels": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "train_size": 24000,
+      "test_size": 10000
+    },
+    {
+      "name": "subsequent_emnist_capitals_ABDEGHNQRS",
+      "labels": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "train_size": 24000,
+      "test_size": 8000
+    }
+  ],
+  "feature_checkpoint": {
+    "task1": {
+      "enabled": true,
+      "loaded": true,
+      "path": "checkpoints/features/paper_task1_s1e2_s2e4_f2d9040e64b69b5e.pt",
+      "matched_by": "exact",
+      "metadata": {
+        "version": 1,
+        "kind": "paper_s1_s2_feature_checkpoint",
+        "stage": "task1",
+        "seed": 0,
+        "method": "catastrophic",
+        "model": {
+          "architecture": "paper_spyketorch",
+          "time_steps": 15,
+          "num_classes": 10,
+          "neurons_per_class": 20,
+          "s1_maps": 30,
+          "s2_maps": 250,
+          "s3_neurons": 200,
+          "conv1_kernel": 5,
+          "conv2_kernel": 3,
+          "conv3_kernel": 5,
+          "conv1_threshold": 15.0,
+          "conv2_threshold": 10.0,
+          "conv1_kwta": 5,
+          "conv2_kwta": 8,
+          "conv1_inhibition_radius": 0,
+          "conv2_inhibition_radius": 0,
+          "conv3_inhibition_radius": 0,
+          "weight_mean": 0.8,
+          "weight_std": 0.05,
+          "filter_threshold": 50.0,
+          "local_normalization_radius": 8
+        },
+        "data": {
+          "dataset_name": "paper_mnist_emnist",
+          "data_root": "data",
+          "input_size": 28,
+          "input_channels": 1,
+          "num_classes": 10,
+          "normalize": false,
+          "subset_seed": 0,
+          "preprocess_cache": true,
+          "preprocess_cache_root": "data/preprocessed/paper_source"
+        },
+        "dataset": {
+          "type": "CachedTensorDataset",
+          "length": 24000,
+          "cache_dir": "data/preprocessed/paper_source/63b095e7b9399f57",
+          "feature_kind": null
+        },
+        "s1_epochs": 2,
+        "s2_epochs": 4,
+        "batch_size": 24000,
+        "shuffle": true,
+        "pre_state_digest": "cec95c5c362cbdc172ff389c81539995d64cb500"
+      }
+    },
+    "task2": {
+      "enabled": true,
+      "loaded": true,
+      "path": "checkpoints/features/paper_task2_s1e2_s2e4_60c0a06b55746fb6.pt",
+      "matched_by": "fallback",
+      "metadata": {
+        "version": 1,
+        "kind": "paper_s1_s2_feature_checkpoint",
+        "stage": "task2",
+        "seed": 0,
+        "method": "catastrophic",
+        "model": {
+          "architecture": "paper_spyketorch",
+          "time_steps": 15,
+          "num_classes": 10,
+          "neurons_per_class": 20,
+          "s1_maps": 30,
+          "s2_maps": 250,
+          "s3_neurons": 200,
+          "conv1_kernel": 5,
+          "conv2_kernel": 3,
+          "conv3_kernel": 5,
+          "conv1_threshold": 15.0,
+          "conv2_threshold": 10.0,
+          "conv1_kwta": 5,
+          "conv2_kwta": 8,
+          "conv1_inhibition_radius": 0,
+          "conv2_inhibition_radius": 0,
+          "conv3_inhibition_radius": 0,
+          "weight_mean": 0.8,
+          "weight_std": 0.05,
+          "filter_threshold": 50.0,
+          "local_normalization_radius": 8
+        },
+        "data": {
+          "dataset_name": "paper_mnist_emnist",
+          "data_root": "data",
+          "input_size": 28,
+          "input_channels": 1,
+          "num_classes": 10,
+          "normalize": false,
+          "subset_seed": 0,
+          "preprocess_cache": true,
+          "preprocess_cache_root": "data/preprocessed/paper_source"
+        },
+        "dataset": {
+          "type": "CachedTensorDataset",
+          "length": 24000,
+          "cache_dir": "data\\preprocessed\\paper_source\\a390cd0731f5a594",
+          "feature_kind": null
+        },
+        "s1_epochs": 2,
+        "s2_epochs": 4,
+        "batch_size": 24000,
+        "shuffle": true,
+        "pre_state_digest": "9110404fa37ae3c1fdeabe7961f90f8d90268e58"
+      }
+    }
+  },
+  "feature_cache": {
+    "task1": {
+      "enabled": true,
+      "feature_kind": "paper_s3_input",
+      "cache_dir": "data/features/c2/126b5223a233559d",
+      "batch_size": 1024,
+      "metadata": {
+        "implementation": "paper_c2_to_s3_input_v1",
+        "stage": "task1",
+        "seed": 0,
+        "method": "catastrophic",
+        "model": {
+          "architecture": "paper_spyketorch",
+          "time_steps": 15,
+          "num_classes": 10,
+          "neurons_per_class": 20,
+          "s1_maps": 30,
+          "s2_maps": 250,
+          "s3_neurons": 200,
+          "conv1_kernel": 5,
+          "conv2_kernel": 3,
+          "conv3_kernel": 5,
+          "conv1_threshold": 15.0,
+          "conv2_threshold": 10.0,
+          "conv1_kwta": 5,
+          "conv2_kwta": 8,
+          "conv1_inhibition_radius": 0,
+          "conv2_inhibition_radius": 0,
+          "conv3_inhibition_radius": 0,
+          "weight_mean": 0.8,
+          "weight_std": 0.05,
+          "filter_threshold": 50.0,
+          "local_normalization_radius": 8
+        },
+        "data": {
+          "dataset_name": "paper_mnist_emnist",
+          "data_root": "data",
+          "input_size": 28,
+          "input_channels": 1,
+          "num_classes": 10,
+          "normalize": false,
+          "subset_seed": 0,
+          "preprocess_cache": true,
+          "preprocess_cache_root": "data/preprocessed/paper_source"
+        },
+        "feature_state_digest": "7a0671ee53975400a7f719a0f0015c0eed110a4d"
+      }
+    },
+    "task2": {
+      "enabled": true,
+      "feature_kind": "paper_s3_input",
+      "cache_dir": "data/features/c2/73f6601a9362c3e7",
+      "batch_size": 1024,
+      "metadata": {
+        "implementation": "paper_c2_to_s3_input_v1",
+        "stage": "task2",
+        "seed": 0,
+        "method": "catastrophic",
+        "model": {
+          "architecture": "paper_spyketorch",
+          "time_steps": 15,
+          "num_classes": 10,
+          "neurons_per_class": 20,
+          "s1_maps": 30,
+          "s2_maps": 250,
+          "s3_neurons": 200,
+          "conv1_kernel": 5,
+          "conv2_kernel": 3,
+          "conv3_kernel": 5,
+          "conv1_threshold": 15.0,
+          "conv2_threshold": 10.0,
+          "conv1_kwta": 5,
+          "conv2_kwta": 8,
+          "conv1_inhibition_radius": 0,
+          "conv2_inhibition_radius": 0,
+          "conv3_inhibition_radius": 0,
+          "weight_mean": 0.8,
+          "weight_std": 0.05,
+          "filter_threshold": 50.0,
+          "local_normalization_radius": 8
+        },
+        "data": {
+          "dataset_name": "paper_mnist_emnist",
+          "data_root": "data",
+          "input_size": 28,
+          "input_channels": 1,
+          "num_classes": 10,
+          "normalize": false,
+          "subset_seed": 0,
+          "preprocess_cache": true,
+          "preprocess_cache_root": "data/preprocessed/paper_source"
+        },
+        "feature_state_digest": "73d01abcbae9c266b50a1063a03048f060f4e1f2"
+      }
+    }
+  },
+  "notes": "Paper-source port: model/preprocessing/forward/STDP/anti-STDP follow dmitryanton68/continuous_learning MozafariMNIST2018 notebooks, backed by the official SpykeTorch package."
+}

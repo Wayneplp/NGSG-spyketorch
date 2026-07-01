@@ -1,10 +1,43 @@
 # 灾难性遗忘复现状态记录
 
-最后更新：2026-06-30
+最后更新：2026-07-01
 
-本次补充：S1/S2 feature checkpoint 和 C2 feature cache 流程已落地；正式 S1=2/S2=4 checkpoint 已生成并随 `dev` 推送到 GitHub；active baseline YAML 已收敛为 3 个。
+本次补充：服务器完整 catastrophic baseline 已跑完；结果已整理到 `published_results/baseline/paper_ch4_catastrophic_source_seed0.json`，并作为当前 baseline 参考。
 
 
+## 2026-07-01 正式服务器 baseline 结果
+
+运行信息：
+
+- 运行目录：`/root/autodl-tmp/NGSG-spyketorch-dev-2928f7e`
+- run name：`paper_ch4_catastrophic_source_seed0`
+- 配置：`configs/baseline/catastrophic_mnist_emnist.yaml`
+- 代码版本：`2928f7e fix: reuse feature checkpoints across cache paths`
+- 本机原始副本：`experiments/server_paper_ch4_catastrophic_source_seed0/`
+- GitHub 精简结果：`published_results/baseline/paper_ch4_catastrophic_source_seed0.json`
+
+关键结果：
+
+| 指标 | 本次结果 | 论文 catastrophic forgetting 参考 |
+| --- | ---: | ---: |
+| Initial MNIST / Task1 after Task1 | 93.14% | 90.8 ± 0.9% |
+| Subsequent MNIST / Task1 after Task2 | 47.54% | 48.1 ± 4.8% |
+| Subsequent EMNIST / Task2 after Task2 | 75.43% | 78.4 ± 1.2% |
+| Forgetting | 45.60% | 约 42.7% |
+| Avg Acc | 61.48% | - |
+
+运行细节：
+
+- Task1 MNIST：24,000 train / 10,000 test。
+- Task2 EMNIST ABDEGHNQRS：24,000 train / 8,000 test。
+- Task1 S1/S2 checkpoint：`checkpoints/features/paper_task1_s1e2_s2e4_f2d9040e64b69b5e.pt`，exact match 加载。
+- Task2 S1/S2 checkpoint：`checkpoints/features/paper_task2_s1e2_s2e4_60c0a06b55746fb6.pt`，fallback match 加载。
+- Task1 C2 cache：`data/features/c2/126b5223a233559d`。
+- 训练过程已使用 `c2_feature_cache.batch_size: 1024`，避免 cached C2 tensor 一次性 24,000 batch 造成 CUDA OOM。
+
+判断：
+
+catastrophic forgetting 趋势已经复现出来。Task2 后 MNIST 保留率 47.54%，和论文 48.1% 非常接近；Initial MNIST 高约 2.3 个点，EMNIST 低约 3 个点。当前可以把该结果作为后续 winner-frequency logging 和 NGSG 的 baseline 参考，但如果目标是严格追论文表格数字，还需要继续核对 EMNIST 数据处理、作者 notebook 的张量保存格式、随机种子和评估协议。
 ## 2026-06-30 晚更新：active baseline YAML 收敛
 
 `configs/baseline/` 当前只保留 3 个 active YAML：
