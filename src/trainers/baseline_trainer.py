@@ -359,8 +359,20 @@ class BaselineTrainer:
         if not enabled or not bool(checkpoint_cfg.get("load", True)) or (s1_epochs <= 0 and s2_epochs <= 0):
             return {"enabled": enabled, "loaded": False}
         checkpoint_path, metadata = self._paper_feature_checkpoint_path(model, dataloader, config, stage_name, s1_epochs, s2_epochs)
+        matched_by = "exact"
         if not checkpoint_path.exists():
-            return {"enabled": True, "loaded": False, "path": str(checkpoint_path), "metadata": metadata}
+            fallback_path = self._find_paper_feature_checkpoint_fallback(
+                expected_path=checkpoint_path,
+                metadata=metadata,
+                config=config,
+                stage_name=stage_name,
+                s1_epochs=s1_epochs,
+                s2_epochs=s2_epochs,
+            )
+            if fallback_path is None:
+                return {"enabled": True, "loaded": False, "path": str(checkpoint_path), "metadata": metadata}
+            checkpoint_path = fallback_path
+            matched_by = "fallback"
         payload = torch.load(checkpoint_path, map_location=device)
         model.conv1.load_state_dict(payload["conv1"])
         model.conv2.load_state_dict(payload["conv2"])
@@ -368,8 +380,47 @@ class BaselineTrainer:
             "enabled": True,
             "loaded": True,
             "path": str(checkpoint_path),
+            "matched_by": matched_by,
             "metadata": payload.get("metadata", metadata),
         }
+
+    def _find_paper_feature_checkpoint_fallback(
+        self,
+        expected_path: Path,
+        metadata: Mapping[str, Any],
+        config: Mapping[str, Any],
+        stage_name: str,
+        s1_epochs: int,
+        s2_epochs: int,
+    ) -> Optional[Path]:
+        checkpoint_cfg = config.get("train", {}).get("feature_checkpoint", {})
+        if not bool(checkpoint_cfg.get("fallback_match", True)):
+            return None
+        root_dir = expected_path.parent
+        pattern = f"paper_{stage_name}_s1e{s1_epochs}_s2e{s2_epochs}_*.pt"
+        expected_model = dict(metadata.get("model", {}))
+        expected_seed = int(metadata.get("seed", 0))
+        candidates = sorted(root_dir.glob(pattern), key=lambda path: path.stat().st_mtime, reverse=True)
+        for candidate in candidates:
+            try:
+                payload = torch.load(candidate, map_location="cpu")
+            except Exception:
+                continue
+            candidate_meta = payload.get("metadata", {})
+            if candidate_meta.get("kind") != "paper_s1_s2_feature_checkpoint":
+                continue
+            if candidate_meta.get("stage") != stage_name:
+                continue
+            if int(candidate_meta.get("s1_epochs", -1)) != int(s1_epochs):
+                continue
+            if int(candidate_meta.get("s2_epochs", -1)) != int(s2_epochs):
+                continue
+            if int(candidate_meta.get("seed", expected_seed)) != expected_seed:
+                continue
+            if dict(candidate_meta.get("model", {})) != expected_model:
+                continue
+            return candidate
+        return None
 
     def save_paper_feature_checkpoint(
         self,
@@ -444,12 +495,20 @@ class BaselineTrainer:
         )
         if was_training:
             model.train()
-        cached_loader = self.build_train_loader(cached_dataset, config)
+        train_cfg = config.get("train", {})
+        cached_batch_size = int(cache_cfg.get("batch_size", train_cfg.get("s3_cached_batch_size", train_cfg.get("batch_size", 64))))
+        cached_loader = build_dataloader(
+            dataset=cached_dataset,
+            batch_size=cached_batch_size,
+            shuffle=bool(cache_cfg.get("shuffle", train_cfg.get("shuffle", True))),
+            num_workers=int(cache_cfg.get("num_workers", train_cfg.get("num_workers", 0))),
+        )
         print(f"[paper c2-cache] using S3 input cache: {cached_dataset.cache_dir}", flush=True)
         return cached_loader, {
             "enabled": True,
             "feature_kind": "paper_s3_input",
             "cache_dir": str(cached_dataset.cache_dir),
+            "batch_size": cached_batch_size,
             "metadata": metadata,
         }
 

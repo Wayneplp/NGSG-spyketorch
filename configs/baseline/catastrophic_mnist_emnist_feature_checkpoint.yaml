@@ -67,6 +67,8 @@ model:
 train:
   # The source notebooks train one large tensor/DataLoader batch per epoch.
   batch_size: 24000
+  # C2/S3-input cache tensors are much larger than raw image samples; keep this smaller to avoid GPU OOM.
+  s3_cached_batch_size: 1024
   learning_rule: paper_source_rstdp
   feature_only: true
   # Paper-reported long run: MNIST initial training uses 600 epochs; subsequent
@@ -87,9 +89,11 @@ train:
     root_dir: checkpoints/features
     load: true
     save: true
+    fallback_match: true
   c2_feature_cache:
     enabled: true
     root_dir: data/features/c2
+    batch_size: 1024
 eval:
   batch_size: 1000
   measure_forgetting: true

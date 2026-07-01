@@ -63,6 +63,8 @@ model:
 train:
   # Paper source uses one full-batch DataLoader per epoch; for medium 1000 samples fits comfortably.
   batch_size: 1000
+  # C2/S3-input cache tensors are larger than raw image samples; keep this smaller when cache is enabled.
+  s3_cached_batch_size: 256
   learning_rule: paper_source_rstdp
   num_epochs_task1: 50
   num_epochs_task2: 10
@@ -80,9 +82,11 @@ train:
     root_dir: checkpoints/features
     load: true
     save: true
+    fallback_match: true
   c2_feature_cache:
     enabled: true
     root_dir: data/features/c2
+    batch_size: 256
 eval:
   batch_size: 1000
   measure_forgetting: true
