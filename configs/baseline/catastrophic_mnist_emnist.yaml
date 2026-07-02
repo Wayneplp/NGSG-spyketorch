@@ -73,6 +73,15 @@ model:
   filter_threshold: 50.0
   local_normalization_radius: 8
 
+continual:
+  neuron_partition:
+    enabled: true
+    f_stable_percentile: 0.70
+    f_shared_percentile: 0.40
+    q_stable_min: 0.60
+    importance:
+      use_weight_strength: true
+
 train:
   # The source notebooks train one large tensor/DataLoader batch per epoch.
   batch_size: 24000

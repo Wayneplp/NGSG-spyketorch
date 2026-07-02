@@ -13,6 +13,7 @@ from torch import nn
 from SpykeTorch import snn
 
 from src.analysis.metrics import summarize_continual_metrics
+from src.continual import NeuronPartition, SDPMGate
 from src.plasticity import SpykeTorchRSTDPConfig, SpykeTorchRewardSTDP
 from src.utils.data import (
     ConcatenatedSubset,
@@ -70,6 +71,7 @@ class BaselineTrainer:
         test_task1_loader = self.build_eval_loader(task1.test_dataset, config)
         test_task2_loader = self.build_eval_loader(task2.test_dataset, config)
 
+        sdpm_gate: Optional[SDPMGate] = None
         task1_training_stats = self.train_single_task(
             model=model,
             dataloader=train_task1_loader,
@@ -77,7 +79,12 @@ class BaselineTrainer:
             rstdp=rstdp,
             device=device,
             stage_name="task1",
+            sdpm_gate=sdpm_gate,
         )
+        sdpm_gate = self.fit_sdpm_gate_after_task1(model, config, task1_training_stats, sdpm_gate)
+        neuron_partition = self.fit_neuron_partition_after_task1(model, config, task1_training_stats)
+        if neuron_partition is not None and neuron_partition.enabled:
+            task1_training_stats["neuron_partition"] = neuron_partition.to_dict(include_arrays=True)
 
         train_task2_loader = self.build_task2_train_loader(task1, task2, config)
         if bool(config.get("train", {}).get("feature_only", False)):
@@ -110,6 +117,7 @@ class BaselineTrainer:
             rstdp=rstdp,
             device=device,
             stage_name="task2",
+            sdpm_gate=sdpm_gate,
         )
 
         task1_after_task2 = self.evaluate(model, test_task1_loader, device)
@@ -120,17 +128,23 @@ class BaselineTrainer:
             task2_after_task2=task2_after_task2,
         )
 
+        extra: Dict[str, Any] = {
+            "device": str(device),
+            "task_summary": bundle_summary(task_bundles),
+            "trainer_plan": self.describe_plan(config),
+            "task1_training": task1_training_stats,
+            "task2_training": task2_training_stats,
+            "model_summary": self.summarize_model(model),
+        }
+        if sdpm_gate is not None and sdpm_gate.enabled:
+            extra["sdpm_gate"] = sdpm_gate.summarize()
+        if neuron_partition is not None and neuron_partition.enabled:
+            extra["neuron_partition"] = neuron_partition.summarize()
+
         return TrainerResult(
             metrics=metrics,
             notes=self.implementation_note(config),
-            extra={
-                "device": str(device),
-                "task_summary": bundle_summary(task_bundles),
-                "trainer_plan": self.describe_plan(config),
-                "task1_training": task1_training_stats,
-                "task2_training": task2_training_stats,
-                "model_summary": self.summarize_model(model),
-            },
+            extra=extra,
         )
 
     def resolve_device(self, config: Mapping[str, Any]) -> torch.device:
@@ -262,6 +276,80 @@ class BaselineTrainer:
             ),
         )
 
+    def fit_sdpm_gate_after_task1(
+        self,
+        model: nn.Module,
+        config: Mapping[str, Any],
+        task1_training_stats: Mapping[str, Any],
+        sdpm_gate: Optional[SDPMGate],
+    ) -> Optional[SDPMGate]:
+        sdpm_cfg = config.get("continual", {}).get("sdpm_gate", {})
+        if not bool(sdpm_cfg.get("enabled", False)):
+            return sdpm_gate
+
+        winner_counts = task1_training_stats.get("output_training", {}).get("winner_counts")
+        if winner_counts is None:
+            raise ValueError(
+                "SDPM gate is enabled but Task 1 winner counts are missing. "
+                "Ensure winner_frequency_log is enabled or S3 winner tracking is active."
+            )
+
+        fitted = SDPMGate.fit_from_task1_stats(
+            model=model,
+            winner_counts=winner_counts,
+            config=sdpm_cfg,
+            global_seed=int(config.get("seed", 0)),
+        )
+        summary = fitted.summarize()
+        print(
+            "[sdpm gate] fitted from Task 1 stats: "
+            f"protected_fraction={summary.get('protected_fraction', 0.0):.4f} "
+            f"gate_mean={summary.get('gate_mean', 0.0):.4f} "
+            f"random_protection={summary.get('random_protection', False)}",
+            flush=True,
+        )
+        return fitted
+
+    def fit_neuron_partition_after_task1(
+        self,
+        model: nn.Module,
+        config: Mapping[str, Any],
+        task1_training_stats: Mapping[str, Any],
+    ) -> Optional[NeuronPartition]:
+        partition_cfg = config.get("continual", {}).get("neuron_partition", {})
+        if not bool(partition_cfg.get("enabled", False)):
+            return None
+
+        output_training = task1_training_stats.get("output_training", {})
+        winner_counts = output_training.get("winner_counts")
+        if winner_counts is None:
+            raise ValueError(
+                "neuron_partition is enabled but Task 1 winner counts are missing. "
+                "Ensure winner_frequency_log, sdpm_gate, or neuron_partition tracking is active."
+            )
+
+        winner_label_counts = output_training.get("winner_label_counts")
+        num_classes = int(config.get("model", {}).get("num_classes", 0)) or None
+        fitted = NeuronPartition.fit_from_task1_stats(
+            model=model,
+            winner_counts=winner_counts,
+            winner_label_counts=winner_label_counts,
+            config=partition_cfg,
+            num_classes=num_classes,
+        )
+        summary = fitted.summarize()
+        role_counts = summary.get("role_counts", {})
+        print(
+            "[neuron partition] fitted from Task 1 stats: "
+            f"stable={role_counts.get('stable', 0)} "
+            f"shared={role_counts.get('shared', 0)} "
+            f"reserve={role_counts.get('reserve', 0)} "
+            f"dead={role_counts.get('dead', 0)} "
+            f"f_stable_thr={summary.get('thresholds', {}).get('f_stable_threshold', 0.0):.1f}",
+            flush=True,
+        )
+        return fitted
+
     def train_single_task(
         self,
         model: nn.Module,
@@ -270,6 +358,7 @@ class BaselineTrainer:
         rstdp: SpykeTorchRewardSTDP,
         device: torch.device,
         stage_name: str,
+        sdpm_gate: Optional[SDPMGate] = None,
     ) -> Dict[str, Any]:
         train_cfg = config.get("train", {})
         learning_rule = str(train_cfg.get("learning_rule", "spyketorch_stdp_rstdp")).lower()
@@ -280,7 +369,14 @@ class BaselineTrainer:
             )
 
         if getattr(model, "paper_source_compatible", False):
-            return self.train_paper_single_task(model, dataloader, config, device, stage_name)
+            return self.train_paper_single_task(
+                model,
+                dataloader,
+                config,
+                device,
+                stage_name,
+                sdpm_gate=sdpm_gate,
+            )
 
         s1_epochs = self._stage_epochs(config, stage_name, "s1_stdp_epochs", 0)
         s2_epochs = self._stage_epochs(config, stage_name, "s2_stdp_epochs", 0)
@@ -546,6 +642,7 @@ class BaselineTrainer:
         config: Mapping[str, Any],
         device: torch.device,
         stage_name: str,
+        sdpm_gate: Optional[SDPMGate] = None,
     ) -> Dict[str, Any]:
         train_cfg = config.get("train", {})
         if bool(train_cfg.get("reset_learning_rates_each_stage", True)) and hasattr(model, "reset_learning_rates"):
@@ -603,7 +700,16 @@ class BaselineTrainer:
         if bool(train_cfg.get("feature_only", False)):
             stats["output_training"] = {"stage": "s3", "epochs": 0, "skipped": "feature_only"}
             return stats
-        stats["output_training"] = self.train_paper_rstdp(model, s3_dataloader, device, s3_epochs, train_cfg)
+        stats["output_training"] = self.train_paper_rstdp(
+            model,
+            s3_dataloader,
+            device,
+            s3_epochs,
+            train_cfg,
+            stage_name=stage_name,
+            sdpm_gate=sdpm_gate,
+            config=config,
+        )
         return stats
     def train_paper_unsupervised(
         self,
@@ -652,12 +758,19 @@ class BaselineTrainer:
         device: torch.device,
         epochs: int,
         train_cfg: Mapping[str, Any],
+        stage_name: str = "task1",
+        sdpm_gate: Optional[SDPMGate] = None,
+        config: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         adaptive_int = float(train_cfg.get("paper_adaptive_int", 0.5))
         adaptive_min = float(train_cfg.get("paper_adaptive_min", 0.0))
         progress_every = int(train_cfg.get("progress_interval_samples", 1000))
         winner_log_cfg = train_cfg.get("winner_frequency_log", {})
         winner_log_enabled = bool(winner_log_cfg.get("enabled", False))
+        sdpm_enabled = bool((config or {}).get("continual", {}).get("sdpm_gate", {}).get("enabled", False))
+        partition_enabled = bool((config or {}).get("continual", {}).get("neuron_partition", {}).get("enabled", False))
+        track_winner_counts = winner_log_enabled or sdpm_enabled or partition_enabled
+        apply_sdpm = sdpm_gate is not None and sdpm_gate.should_apply(stage_name)
         winner_log_top_k = int(winner_log_cfg.get("top_k", 10))
         winner_log_include_counts = bool(winner_log_cfg.get("include_counts", True))
         num_s3_neurons = int(getattr(getattr(model, "config", None), "s3_neurons", len(getattr(model, "decision_map", []))))
@@ -669,8 +782,12 @@ class BaselineTrainer:
         history = []
         best_acc1 = 0.0
         stage_start = time.time()
+        task_winner_counts = [0] * num_s3_neurons
+        task_winner_label_counts = [[0] * num_classes for _ in range(num_s3_neurons)] if num_classes > 0 else []
         using_s3_input_cache = self._is_paper_s3_input_loader(dataloader) and hasattr(model, "forward_from_s3_input")
         feature_source = "cached_c2_s3_input" if using_s3_input_cache else "raw_or_preprocessed_input"
+        if apply_sdpm:
+            print(f"[paper s3] SDPM gate active for stage={stage_name}", flush=True)
         for epoch_idx in range(epochs):
             model.train()
             correct = 0
@@ -679,6 +796,7 @@ class BaselineTrainer:
             samples = 0
             winner_counts = [0] * num_s3_neurons
             winner_class_counts = [0] * num_classes
+            winner_label_counts = [[0] * num_classes for _ in range(num_s3_neurons)] if num_classes > 0 else []
             winner_log_samples = 0
             epoch_start = time.time()
             for batch in dataloader:
@@ -693,22 +811,33 @@ class BaselineTrainer:
                     else:
                         decision = int(model(inputs[sample_idx], 3))
                     target = int(targets[sample_idx].item())
-                    if winner_log_enabled:
+                    if track_winner_counts:
                         winner_idx = self._first_winner_index(model)
                         if winner_idx is not None:
                             winner_log_samples += 1
                             if 0 <= winner_idx < len(winner_counts):
                                 winner_counts[winner_idx] += 1
+                            if 0 <= winner_idx < len(task_winner_counts):
+                                task_winner_counts[winner_idx] += 1
+                            if num_classes > 0 and 0 <= winner_idx < len(winner_label_counts) and 0 <= target < num_classes:
+                                winner_label_counts[winner_idx][target] += 1
+                                task_winner_label_counts[winner_idx][target] += 1
                             winner_class = self._winner_class(model, winner_idx, decision)
                             if 0 <= winner_class < len(winner_class_counts):
                                 winner_class_counts[winner_class] += 1
                     if decision != -1:
                         if decision == target:
                             batch_correct += 1
-                            model.reward()
+                            if apply_sdpm:
+                                sdpm_gate.gated_reward(model)
+                            else:
+                                model.reward()
                         else:
                             batch_wrong += 1
-                            model.punish()
+                            if apply_sdpm:
+                                sdpm_gate.gated_punish(model)
+                            else:
+                                model.punish()
                     else:
                         batch_silent += 1
                     samples += 1
@@ -773,13 +902,19 @@ class BaselineTrainer:
                 f"eta={self._format_seconds(remaining_seconds)}",
                 flush=True,
             )
-        return {
+        output_stats: Dict[str, Any] = {
             "stage": "s3",
             "epochs": epochs,
             "learning_rule": "paper_source_rstdp",
             "feature_source": feature_source,
             "history": history,
+            "winner_counts": task_winner_counts,
         }
+        if track_winner_counts and task_winner_label_counts:
+            output_stats["winner_label_counts"] = task_winner_label_counts
+        if apply_sdpm and sdpm_gate is not None:
+            output_stats["sdpm_gate"] = sdpm_gate.summarize()
+        return output_stats
 
     def _first_winner_index(self, model: nn.Module) -> Optional[int]:
         winners = getattr(model, "ctx", {}).get("winners") if hasattr(model, "ctx") else None
@@ -1079,6 +1214,7 @@ class BaselineTrainer:
             "tasks": config.get("tasks", {}),
             "train": config.get("train", {}),
             "eval": config.get("eval", {}),
+            "continual": config.get("continual", {}),
             "implementation": implementation,
         }
 
@@ -1098,12 +1234,19 @@ class BaselineTrainer:
 
     def implementation_note(self, config: Optional[Mapping[str, Any]] = None) -> str:
         architecture = str((config or {}).get("model", {}).get("architecture", "spyketorch")).lower()
+        sdpm_enabled = bool((config or {}).get("continual", {}).get("sdpm_gate", {}).get("enabled", False))
+        partition_enabled = bool((config or {}).get("continual", {}).get("neuron_partition", {}).get("enabled", False))
         if architecture in {"paper_spyketorch", "paper_source", "mozafari2018"}:
-            return (
+            note = (
                 "Paper-source port: model/preprocessing/forward/STDP/anti-STDP follow "
                 "dmitryanton68/continuous_learning MozafariMNIST2018 notebooks, backed by "
                 "the official SpykeTorch package."
             )
+            if sdpm_enabled:
+                note += " SDPM gate scales S3 reward/anti-STDP updates using Task 1 winner-frequency and weight-strength importance."
+            if partition_enabled:
+                note += " Neuron partition assigns S3 neurons to stable/shared/reserve pools from Task 1 winner statistics."
+            return note
         return (
             "Official SpykeTorch-based tutorial path: S1/S2 use SpykeTorch snn.STDP, "
             "S1/S2/S3 layers are SpykeTorch modules, and S3 uses snn.STDP plus anti-STDP."

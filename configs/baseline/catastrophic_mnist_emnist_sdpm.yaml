@@ -1,4 +1,5 @@
-# Medium-scale port of dmitryanton68/continuous_learning catastrophic forgetting source.
+# Full-scale SDPM-only continual learning run on the paper-source protocol.
+# Baseline comparison: configs/baseline/catastrophic_mnist_emnist.yaml
 method: catastrophic
 seed: 0
 run_name: null
@@ -22,8 +23,7 @@ tasks:
         normalize: false
       labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
       mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-      train_samples_per_label: 100
-      test_samples_per_label: 100
+      train_samples_per_label: 2400
     - name: subsequent_emnist_capitals_ABDEGHNQRS
       dataset:
         dataset_name: emnist
@@ -33,9 +33,10 @@ tasks:
         fix_orientation: true
       labels: [1, 2, 4, 5, 7, 8, 14, 17, 18, 19]
       mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-      train_samples_per_label: 100
-      test_samples_per_label: 100
-  task_order: [0, 1]
+      train_samples_per_label: 2400
+  task_order:
+    - 0
+    - 1
 
 model:
   architecture: paper_spyketorch
@@ -61,6 +62,18 @@ model:
   local_normalization_radius: 8
 
 continual:
+  sdpm_gate:
+    enabled: true
+    source_stage: task1
+    apply_stages: [task2]
+    importance:
+      use_winner_frequency: true
+      use_weight_strength: true
+    g_min: 0.05
+    gamma: 1.0
+    protect_top_fraction: 0.3
+    random_protection: false
+    track_drift: true
   neuron_partition:
     enabled: true
     f_stable_percentile: 0.70
@@ -70,15 +83,13 @@ continual:
       use_weight_strength: true
 
 train:
-  # Paper source uses one full-batch DataLoader per epoch; for medium 1000 samples fits comfortably.
-  batch_size: 1000
-  # C2/S3-input cache tensors are larger than raw image samples; keep this smaller when cache is enabled.
-  s3_cached_batch_size: 256
+  batch_size: 24000
+  s3_cached_batch_size: 1024
   num_workers: 0
   pin_memory: true
   learning_rule: paper_source_rstdp
-  num_epochs_task1: 50
-  num_epochs_task2: 10
+  num_epochs_task1: 600
+  num_epochs_task2: 100
   s1_stdp_epochs_task1: 2
   s2_stdp_epochs_task1: 4
   s1_stdp_epochs_task2: 2
@@ -86,7 +97,7 @@ train:
   paper_adaptive_int: 0.5
   paper_adaptive_min: 0.0
   reset_learning_rates_each_stage: true
-  progress_interval_samples: 1000
+  progress_interval_samples: 2400
   winner_frequency_log:
     enabled: true
     top_k: 10
@@ -101,12 +112,12 @@ train:
   c2_feature_cache:
     enabled: true
     root_dir: data/features/c2
-    batch_size: 256
-    # Keep the per-sample .pt cache in RAM across S3 epochs on high-memory servers.
+    batch_size: 1024
     preload: true
     preload_pin_memory: false
     pin_memory: true
     num_workers: 0
+
 eval:
   batch_size: 1000
   pin_memory: true
