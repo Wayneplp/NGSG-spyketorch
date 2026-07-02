@@ -28,17 +28,35 @@ class TaskBundle:
 class CachedTensorDataset(Dataset[Any]):
     """Read-only dataset backed by precomputed tensor samples on disk."""
 
-    def __init__(self, cache_dir: Path, length: int, feature_kind: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        cache_dir: Path,
+        length: int,
+        feature_kind: Optional[str] = None,
+        preload: bool = False,
+        pin_memory: bool = False,
+    ) -> None:
         self.cache_dir = Path(cache_dir)
         self.length = int(length)
         self.feature_kind = feature_kind
+        self._preloaded: Optional[List[Any]] = None
+        if preload:
+            self._preloaded = [self._load_item(index, pin_memory=pin_memory) for index in range(self.length)]
 
     def __len__(self) -> int:
         return self.length
 
     def __getitem__(self, index: int) -> Any:
+        if self._preloaded is not None:
+            return self._preloaded[index]
+        return self._load_item(index, pin_memory=False)
+
+    def _load_item(self, index: int, pin_memory: bool) -> Any:
         payload = torch.load(self.cache_dir / f"{index:06d}.pt", map_location="cpu")
-        return payload["input"], int(payload["target"])
+        input_tensor = payload["input"]
+        if pin_memory and torch.cuda.is_available():
+            input_tensor = input_tensor.pin_memory()
+        return input_tensor, int(payload["target"])
 
 
 class RawEMNISTDataset(Dataset[Any]):
@@ -149,6 +167,8 @@ def build_preprocessed_tensor_cache(
     encoder: Any,
     metadata: Mapping[str, Any],
     feature_kind: Optional[str] = None,
+    preload: bool = False,
+    pin_memory: bool = False,
 ) -> CachedTensorDataset:
     """Materialize encoded tensors once, then read them back as a dataset."""
 
@@ -189,7 +209,16 @@ def build_preprocessed_tensor_cache(
                     flush=True,
                 )
 
-    return CachedTensorDataset(cache_dir=cache_dir, length=length, feature_kind=feature_kind)
+    if preload:
+        print(f"[cache] preloading {length} samples from {cache_dir} into RAM", flush=True)
+
+    return CachedTensorDataset(
+        cache_dir=cache_dir,
+        length=length,
+        feature_kind=feature_kind,
+        preload=preload,
+        pin_memory=pin_memory,
+    )
 
 
 def _build_transform(normalize: bool) -> transforms.Compose:
@@ -438,13 +467,21 @@ def build_dataloader(
     batch_size: int,
     shuffle: bool,
     num_workers: int = 0,
+    pin_memory: bool = False,
+    persistent_workers: bool = False,
+    prefetch_factor: Optional[int] = None,
 ) -> DataLoader[Any]:
-    return DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=num_workers,
-    )
+    loader_kwargs: Dict[str, Any] = {
+        "batch_size": batch_size,
+        "shuffle": shuffle,
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+    }
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = persistent_workers
+        if prefetch_factor is not None:
+            loader_kwargs["prefetch_factor"] = prefetch_factor
+    return DataLoader(dataset, **loader_kwargs)
 
 
 class ConcatenatedSubset(Dataset[Any]):

@@ -1,8 +1,45 @@
 # 灾难性遗忘复现状态记录
 
-最后更新：2026-07-01
+最后更新：2026-07-02
 
-本次补充：服务器完整 catastrophic baseline 已跑完；结果已整理到 `published_results/baseline/paper_ch4_catastrophic_source_seed0.json`，并作为当前 baseline 参考。
+本次补充：服务器完整 catastrophic baseline 已在开启 winner-frequency logging 后跑完；结果已整理到 `published_results/baseline/paper_ch4_catastrophic_optimized_winnerlog_seed0.json`，并作为当前 NGSG 统计基线参考。
+
+
+## 2026-07-02 winner-frequency logging 服务器 baseline 结果
+
+运行信息：
+
+- 服务器仓库：`/root/autodl-tmp/NGSG-spyketorch-4a958ae`
+- run name：`paper_ch4_catastrophic_optimized_winnerlog_seed0`
+- 配置：`configs/baseline/catastrophic_mnist_emnist.yaml`
+- 代码版本：`e86a263 Add latest server status note`
+- 完成时间：2026-07-02 03:29:59 +0800
+- 本机原始副本：`experiments/server_paper_ch4_catastrophic_optimized_winnerlog_seed0/`
+- 精简结果：`published_results/baseline/paper_ch4_catastrophic_optimized_winnerlog_seed0.json`
+
+关键结果：
+
+| 指标 | 本次结果 | 论文 catastrophic forgetting 参考 |
+| --- | ---: | ---: |
+| Initial MNIST / Task1 after Task1 | 92.84% | 90.8 ± 0.9% |
+| Subsequent MNIST / Task1 after Task2 | 48.42% | 48.1 ± 4.8% |
+| Subsequent EMNIST / Task2 after Task2 | 74.91% | 78.4 ± 1.2% |
+| Forgetting | 44.42% | 约 42.7% |
+| Avg Acc | 61.67% | - |
+
+运行细节：
+
+- Task1 MNIST：24,000 train / 10,000 test。
+- Task2 EMNIST ABDEGHNQRS：24,000 train / 8,000 test。
+- S3 训练：Task1 600 epoch，Task2 100 epoch。
+- S1/S2 训练：每个任务 S1 2 epoch，S2 4 epoch。
+- `winner_frequency_log.enabled: true`，记录 top-10 winner 和完整 winner counts，用于后续 stable/shared/reserve neuron 划分。
+- `c2_feature_cache.batch_size: 1024`，避免 cached C2 tensor 一次性 24,000 batch 造成 CUDA OOM。
+- 远端当前是无 GPU 模式上电，`tmux` 会话已结束，`nvidia-smi` 在该模式下返回 permission denied。
+
+判断：
+
+这次结果比 2026-07-01 基线的 MNIST 保留率更贴近论文表格：48.42% vs 48.1%。Initial MNIST 仍略高，EMNIST 仍低约 3.5 个点，但整体遗忘幅度和论文 baseline 已经对齐。由于本次额外记录 winner-frequency 统计，后续 NGSG 的 neuron partition、novelty gate 和 reserve activation 应优先基于这次产物继续做。
 
 
 ## 2026-07-01 正式服务器 baseline 结果

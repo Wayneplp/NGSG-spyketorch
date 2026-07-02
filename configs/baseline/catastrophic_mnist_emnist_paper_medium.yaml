@@ -65,6 +65,8 @@ train:
   batch_size: 1000
   # C2/S3-input cache tensors are larger than raw image samples; keep this smaller when cache is enabled.
   s3_cached_batch_size: 256
+  num_workers: 0
+  pin_memory: true
   learning_rule: paper_source_rstdp
   num_epochs_task1: 50
   num_epochs_task2: 10
@@ -76,6 +78,10 @@ train:
   paper_adaptive_min: 0.0
   reset_learning_rates_each_stage: true
   progress_interval_samples: 1000
+  winner_frequency_log:
+    enabled: true
+    top_k: 10
+    include_counts: true
   shuffle: true
   feature_checkpoint:
     enabled: true
@@ -87,8 +93,14 @@ train:
     enabled: true
     root_dir: data/features/c2
     batch_size: 256
+    # Keep the per-sample .pt cache in RAM across S3 epochs on high-memory servers.
+    preload: true
+    preload_pin_memory: false
+    pin_memory: true
+    num_workers: 0
 eval:
   batch_size: 1000
+  pin_memory: true
   measure_forgetting: true
   save_intermediate_metrics: true
   metric_names:

@@ -69,6 +69,8 @@ train:
   batch_size: 24000
   # C2/S3-input cache tensors are much larger than raw image samples; keep this smaller to avoid GPU OOM.
   s3_cached_batch_size: 1024
+  num_workers: 0
+  pin_memory: true
   learning_rule: paper_source_rstdp
   feature_only: true
   # Paper-reported long run: MNIST initial training uses 600 epochs; subsequent
@@ -83,6 +85,10 @@ train:
   paper_adaptive_min: 0.0
   reset_learning_rates_each_stage: true
   progress_interval_samples: 2400
+  winner_frequency_log:
+    enabled: true
+    top_k: 10
+    include_counts: true
   shuffle: true
   feature_checkpoint:
     enabled: true
@@ -94,8 +100,14 @@ train:
     enabled: true
     root_dir: data/features/c2
     batch_size: 1024
+    # Keep the per-sample .pt cache in RAM across S3 epochs on high-memory servers.
+    preload: true
+    preload_pin_memory: false
+    pin_memory: true
+    num_workers: 0
 eval:
   batch_size: 1000
+  pin_memory: true
   measure_forgetting: true
   save_intermediate_metrics: true
   metric_names:

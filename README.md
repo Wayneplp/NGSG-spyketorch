@@ -1,6 +1,6 @@
 # NGSG SpykeTorch 项目手册
 
-最后更新：2026-07-01
+最后更新：2026-07-02
 
 这个仓库只保留两个主要 Markdown 入口：
 
@@ -9,23 +9,24 @@
 
 其他旧的计划文档、配置 README 和模块 README 已合并到本文件，避免之后不知道该看哪一个。
 
-## 0. 最新正式 baseline 结果（2026-07-01）
+## 0. 最新正式 baseline 结果（2026-07-02）
 
-服务器完整 `catastrophic_mnist_emnist.yaml` 已跑完，运行版本为 `2928f7e`，run name 为 `paper_ch4_catastrophic_source_seed0`。
+服务器完整 `catastrophic_mnist_emnist.yaml` 已在开启 winner-frequency logging 后跑完，运行版本为 `e86a263`，run name 为 `paper_ch4_catastrophic_optimized_winnerlog_seed0`。
 
 | 指标 | 本次结果 | 论文 catastrophic forgetting 参考 |
 | --- | ---: | ---: |
-| Initial MNIST / Task1 after Task1 | 93.14% | 90.8 ± 0.9% |
-| Subsequent MNIST / Task1 after Task2 | 47.54% | 48.1 ± 4.8% |
-| Subsequent EMNIST / Task2 after Task2 | 75.43% | 78.4 ± 1.2% |
-| Forgetting | 45.60% | 约 42.7% |
-| Avg Acc | 61.48% | - |
+| Initial MNIST / Task1 after Task1 | 92.84% | 90.8 ± 0.9% |
+| Subsequent MNIST / Task1 after Task2 | 48.42% | 48.1 ± 4.8% |
+| Subsequent EMNIST / Task2 after Task2 | 74.91% | 78.4 ± 1.2% |
+| Forgetting | 44.42% | 约 42.7% |
+| Avg Acc | 61.67% | - |
 
-结论：catastrophic forgetting 趋势已经复现出来。Task2 之后 MNIST 保留率 47.54%，和论文 48.1% 非常接近；EMNIST 低约 3 个点，后续如果要追表格数字，需要继续核对 EMNIST 数据处理、作者 notebook 中的保存张量格式和随机种子细节。
+结论：catastrophic forgetting 趋势已经稳定复现。Task2 之后 MNIST 保留率 48.42%，和论文 48.1% 基本对齐；EMNIST 仍低约 3.5 个点，后续如果要追表格数字，需要继续核对 EMNIST 数据处理、作者 notebook 中的保存张量格式和随机种子细节。winner-frequency logging 已开启，可作为后续 NGSG 的统计基线。
 
-可提交的精简结果文件：`published_results/baseline/paper_ch4_catastrophic_source_seed0.json`。
+可提交的精简结果文件：`published_results/baseline/paper_ch4_catastrophic_optimized_winnerlog_seed0.json`。
 
-本机原始服务器产物副本：`experiments/server_paper_ch4_catastrophic_source_seed0/`，其中包含完整 `result.json`、`resolved_config.json`、`baseline_summary.csv` 和运行日志。该目录属于运行产物，不进入 git。
+本机原始服务器产物副本：`experiments/server_paper_ch4_catastrophic_optimized_winnerlog_seed0/`，其中包含完整 `result.json`、`resolved_config.json`、`baseline_summary.csv` 和运行日志。该目录属于运行产物，不进入 git。
+
 ## 1. 当前目标
 
 当前目标不是立刻写完整 NGSG，而是按顺序推进：

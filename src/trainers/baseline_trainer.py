@@ -177,20 +177,28 @@ class BaselineTrainer:
 
     def build_train_loader(self, dataset: Any, config: Mapping[str, Any]) -> Any:
         train_cfg = config.get("train", {})
+        prefetch_factor = train_cfg.get("prefetch_factor")
         return build_dataloader(
             dataset=dataset,
             batch_size=int(train_cfg.get("batch_size", 64)),
             shuffle=bool(train_cfg.get("shuffle", True)),
             num_workers=int(train_cfg.get("num_workers", 0)),
+            pin_memory=bool(train_cfg.get("pin_memory", torch.cuda.is_available())),
+            persistent_workers=bool(train_cfg.get("persistent_workers", False)),
+            prefetch_factor=int(prefetch_factor) if prefetch_factor is not None else None,
         )
 
     def build_eval_loader(self, dataset: Any, config: Mapping[str, Any]) -> Any:
         eval_cfg = config.get("eval", {})
+        prefetch_factor = eval_cfg.get("prefetch_factor")
         return build_dataloader(
             dataset=dataset,
             batch_size=int(eval_cfg.get("batch_size", 64)),
             shuffle=False,
             num_workers=int(eval_cfg.get("num_workers", 0)),
+            pin_memory=bool(eval_cfg.get("pin_memory", torch.cuda.is_available())),
+            persistent_workers=bool(eval_cfg.get("persistent_workers", False)),
+            prefetch_factor=int(prefetch_factor) if prefetch_factor is not None else None,
         )
 
     def build_task2_train_loader(
@@ -235,6 +243,8 @@ class BaselineTrainer:
                     "split": split_name,
                     "labels": bundle.label_set,
                 },
+                preload=bool(data_cfg.get("preprocess_cache_preload", False)),
+                pin_memory=bool(data_cfg.get("preprocess_cache_pin_memory", False)),
             )
 
         return (
@@ -486,22 +496,33 @@ class BaselineTrainer:
             with torch.no_grad():
                 return model.extract_s3_input(sample)
 
+        cache_preload = bool(cache_cfg.get("preload", False))
         cached_dataset = build_preprocessed_tensor_cache(
             dataset=source_dataset,
             cache_root=cache_root,
             encoder=encode_s3_input,
             metadata=metadata,
             feature_kind="paper_s3_input",
+            preload=cache_preload,
+            pin_memory=bool(cache_cfg.get("preload_pin_memory", False)),
         )
         if was_training:
             model.train()
         train_cfg = config.get("train", {})
         cached_batch_size = int(cache_cfg.get("batch_size", train_cfg.get("s3_cached_batch_size", train_cfg.get("batch_size", 64))))
+        cached_num_workers = int(cache_cfg.get("num_workers", train_cfg.get("num_workers", 0)))
+        if cache_preload and cached_num_workers > 0:
+            print("[paper c2-cache] preload=true; forcing num_workers=0 to avoid duplicating the RAM cache", flush=True)
+            cached_num_workers = 0
+        prefetch_factor = cache_cfg.get("prefetch_factor", train_cfg.get("prefetch_factor"))
         cached_loader = build_dataloader(
             dataset=cached_dataset,
             batch_size=cached_batch_size,
             shuffle=bool(cache_cfg.get("shuffle", train_cfg.get("shuffle", True))),
-            num_workers=int(cache_cfg.get("num_workers", train_cfg.get("num_workers", 0))),
+            num_workers=cached_num_workers,
+            pin_memory=bool(cache_cfg.get("pin_memory", train_cfg.get("pin_memory", torch.cuda.is_available()))),
+            persistent_workers=bool(cache_cfg.get("persistent_workers", train_cfg.get("persistent_workers", False))),
+            prefetch_factor=int(prefetch_factor) if prefetch_factor is not None else None,
         )
         print(f"[paper c2-cache] using S3 input cache: {cached_dataset.cache_dir}", flush=True)
         return cached_loader, {
@@ -509,6 +530,9 @@ class BaselineTrainer:
             "feature_kind": "paper_s3_input",
             "cache_dir": str(cached_dataset.cache_dir),
             "batch_size": cached_batch_size,
+            "num_workers": cached_num_workers,
+            "pin_memory": bool(cache_cfg.get("pin_memory", train_cfg.get("pin_memory", torch.cuda.is_available()))),
+            "preload": cache_preload,
             "metadata": metadata,
         }
 
@@ -632,6 +656,12 @@ class BaselineTrainer:
         adaptive_int = float(train_cfg.get("paper_adaptive_int", 0.5))
         adaptive_min = float(train_cfg.get("paper_adaptive_min", 0.0))
         progress_every = int(train_cfg.get("progress_interval_samples", 1000))
+        winner_log_cfg = train_cfg.get("winner_frequency_log", {})
+        winner_log_enabled = bool(winner_log_cfg.get("enabled", False))
+        winner_log_top_k = int(winner_log_cfg.get("top_k", 10))
+        winner_log_include_counts = bool(winner_log_cfg.get("include_counts", True))
+        num_s3_neurons = int(getattr(getattr(model, "config", None), "s3_neurons", len(getattr(model, "decision_map", []))))
+        num_classes = int(getattr(getattr(model, "config", None), "num_classes", 0))
         apr = float(model.stdp3.learning_rate[0][0].item())
         anr = float(model.stdp3.learning_rate[0][1].item())
         app = float(model.anti_stdp3.learning_rate[0][1].item())
@@ -647,6 +677,9 @@ class BaselineTrainer:
             wrong = 0
             silent = 0
             samples = 0
+            winner_counts = [0] * num_s3_neurons
+            winner_class_counts = [0] * num_classes
+            winner_log_samples = 0
             epoch_start = time.time()
             for batch in dataloader:
                 inputs, targets = move_batch_to_device(batch, device)
@@ -660,6 +693,15 @@ class BaselineTrainer:
                     else:
                         decision = int(model(inputs[sample_idx], 3))
                     target = int(targets[sample_idx].item())
+                    if winner_log_enabled:
+                        winner_idx = self._first_winner_index(model)
+                        if winner_idx is not None:
+                            winner_log_samples += 1
+                            if 0 <= winner_idx < len(winner_counts):
+                                winner_counts[winner_idx] += 1
+                            winner_class = self._winner_class(model, winner_idx, decision)
+                            if 0 <= winner_class < len(winner_class_counts):
+                                winner_class_counts[winner_class] += 1
                     if decision != -1:
                         if decision == target:
                             batch_correct += 1
@@ -695,20 +737,37 @@ class BaselineTrainer:
             elapsed_seconds = time.time() - stage_start
             remaining_seconds = self._eta_seconds(elapsed_seconds, epoch_idx + 1, epochs)
             silent_rate = float(silent / max(samples, 1))
-            history.append(
-                {
-                    "epoch": epoch_idx + 1,
-                    "samples": samples,
-                    "train_acc_proxy": train_acc_proxy,
-                    "correct": correct,
-                    "wrong": wrong,
-                    "silent": silent,
-                }
-            )
+            winner_frequency = None
+            winner_log_text = ""
+            if winner_log_enabled:
+                winner_frequency = self._summarize_winner_frequency(
+                    model=model,
+                    winner_counts=winner_counts,
+                    winner_class_counts=winner_class_counts,
+                    total_winners=winner_log_samples,
+                    top_k=winner_log_top_k,
+                    include_counts=winner_log_include_counts,
+                )
+                winner_log_text = (
+                    f" winner_active={winner_frequency['active_neurons']}/{winner_frequency['total_neurons']}"
+                    f" max_winner_fraction={winner_frequency['max_winner_fraction']:.4f}"
+                )
+            epoch_record = {
+                "epoch": epoch_idx + 1,
+                "samples": samples,
+                "train_acc_proxy": train_acc_proxy,
+                "correct": correct,
+                "wrong": wrong,
+                "silent": silent,
+            }
+            if winner_frequency is not None:
+                epoch_record["winner_frequency"] = winner_frequency
+            history.append(epoch_record)
             print(
                 f"[paper s3] epoch {epoch_idx + 1}/{epochs} done "
                 f"samples={samples} acc1={train_acc_proxy:.4f} best_acc1={best_acc1:.4f} "
-                f"correct={correct} wrong={wrong} silent={silent} silent_rate={silent_rate:.4f} "
+                f"correct={correct} wrong={wrong} silent={silent} silent_rate={silent_rate:.4f}"
+                f"{winner_log_text} "
                 f"epoch_time={self._format_seconds(epoch_seconds)} "
                 f"elapsed={self._format_seconds(elapsed_seconds)} "
                 f"eta={self._format_seconds(remaining_seconds)}",
@@ -721,6 +780,67 @@ class BaselineTrainer:
             "feature_source": feature_source,
             "history": history,
         }
+
+    def _first_winner_index(self, model: nn.Module) -> Optional[int]:
+        winners = getattr(model, "ctx", {}).get("winners") if hasattr(model, "ctx") else None
+        if winners is None or len(winners) == 0:
+            return None
+        try:
+            return int(winners[0][0])
+        except (TypeError, ValueError, IndexError):
+            return None
+
+    def _winner_class(self, model: nn.Module, winner_idx: int, fallback_decision: int) -> int:
+        decision_map = getattr(model, "decision_map", None)
+        if decision_map is not None and 0 <= winner_idx < len(decision_map):
+            return int(decision_map[winner_idx])
+        return int(fallback_decision)
+
+    def _summarize_winner_frequency(
+        self,
+        model: nn.Module,
+        winner_counts: Sequence[int],
+        winner_class_counts: Sequence[int],
+        total_winners: int,
+        top_k: int,
+        include_counts: bool,
+    ) -> Dict[str, Any]:
+        counts = [int(count) for count in winner_counts]
+        total_neurons = len(counts)
+        active_neurons = sum(1 for count in counts if count > 0)
+        max_count = max(counts) if counts else 0
+        top = sorted(enumerate(counts), key=lambda item: (-item[1], item[0]))[: max(int(top_k), 0)]
+        top_winners = [
+            {
+                "neuron": int(neuron_idx),
+                "class": self._winner_class(model, int(neuron_idx), -1),
+                "count": int(count),
+                "fraction": float(count / max(total_winners, 1)),
+            }
+            for neuron_idx, count in top
+            if count > 0
+        ]
+        per_class_active = [0] * len(winner_class_counts)
+        for neuron_idx, count in enumerate(counts):
+            if count <= 0:
+                continue
+            winner_class = self._winner_class(model, neuron_idx, -1)
+            if 0 <= winner_class < len(per_class_active):
+                per_class_active[winner_class] += 1
+        summary: Dict[str, Any] = {
+            "total_winners": int(total_winners),
+            "total_neurons": int(total_neurons),
+            "active_neurons": int(active_neurons),
+            "dead_neurons": int(total_neurons - active_neurons),
+            "max_winner_count": int(max_count),
+            "max_winner_fraction": float(max_count / max(total_winners, 1)),
+            "per_class_wins": [int(count) for count in winner_class_counts],
+            "per_class_active_neurons": [int(count) for count in per_class_active],
+            "top_winners": top_winners,
+        }
+        if include_counts:
+            summary["winner_counts"] = counts
+        return summary
 
     def train_s1_stdp(self, model: nn.Module, dataloader: Any, config: Mapping[str, Any], device: torch.device, epochs: int) -> Dict[str, Any]:
         train_cfg = config.get("train", {})

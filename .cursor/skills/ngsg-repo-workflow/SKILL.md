@@ -1,189 +1,186 @@
 ---
 name: ngsg-repo-workflow
 description: >-
-  NGSG-spyketorch 论文仓库的分支策略、合并流程与租服务器部署规范。
-  在 dev/baseline/ngsg 分支切换、合并 codex/server-preprocess-cache、
-  推送远程、服务器拉代码或跑实验时使用。
+  Wayneplp/NGSG-spyketorch 的 GitHub 账户、分支策略、commit/PR/push 规范与
+  租服务器代码同步。在 dev/baseline/ngsg 分支切换、推送远程、创建 PR、合并、
+  废弃 codex 分支、或用户问「仓库怎么处理 / GitHub 怎么推」时使用。
+  服务器 SSH 跑实验见 ngsg-server-experiments。
 ---
 
-# NGSG-spyketorch 仓库工作流
+# NGSG-spyketorch GitHub 工作流
 
-## 仓库定位
+## GitHub 身份（固定，勿重复询问用户）
 
-本仓库同时承担三件事，按优先级排序：
+| 项 | 值 |
+| --- | --- |
+| GitHub 用户 | `Wayneplp` |
+| 仓库 | `https://github.com/Wayneplp/NGSG-spyketorch.git` |
+| remote 名 | `origin` |
+| 本地路径 | `F:/paper_code/NGSG-spyketorch`（Windows） |
+| 服务器路径 | `/root/autodl-tmp/NGSG-spyketorch-4a958ae` |
 
-1. **baseline 复现** — 对齐 SpykeTorch / Mozafari 持续学习论文
-2. **NGSG 创新实现** — 在 S3 层加入 novelty-gated growth
-3. **实验基础设施** — 数据加载、预处理缓存、训练日志（本地与租服务器共用）
-
-代码与配置进 git；数据集、日志、checkpoint、预处理 `.pt` 缓存不进 git（见 `.gitignore`）。
+**默认集成分支**：`dev`（本地开发、服务器实验都跟这条分支）。
 
 ## 分支拓扑
 
 ```
 main                          稳定正式版，只从 dev 合并已验证内容
-  └── dev                     日常集成，所有功能先到这里
-        ├── baseline/continuous-learning   仅 baseline 复现相关改动
-        └── ngsg/novelty-gated-growth      仅 NGSG 创新相关改动
+  └── dev                     日常集成（默认工作分支）
+        ├── baseline/continuous-learning   baseline 复现
+        └── ngsg/novelty-gated-growth      NGSG 创新
 ```
 
 | 分支 | 用途 | 合并方向 |
-|------|------|----------|
-| `main` | 可对外引用的稳定快照 | 仅接受 `dev` 的 PR/merge |
-| `dev` | 日常开发集成 | 接收 baseline/ngsg 的功能 PR；接收 infra 改进 |
-| `baseline/continuous-learning` | baseline 实验与对齐 | 从 `dev` 定期 rebase/merge；完成后 merge 回 `dev` |
-| `ngsg/novelty-gated-growth` | NGSG 模块 | 从 `dev`（或 baseline 稳定点）分出；完成后 merge 回 `dev` |
+| --- | --- | --- |
+| `main` | 对外稳定快照 | 仅接受 `dev` |
+| `dev` | 日常集成 | 接收 feature 分支与 infra |
+| `baseline/continuous-learning` | baseline 实验与论文对齐 | 从 `dev` 更新；完成后 merge 回 `dev` |
+| `ngsg/novelty-gated-growth` | NGSG 模块 | 同上 |
 
-**禁止**：在 `main` 上直接开发；在 feature 分支上长期堆 infra 而不回 `dev`。
+**禁止**：在 `main` 直接开发；长期维护 `codex/*` 服务器分支。
 
-## 当前已知状态（2026-06-30）
+## 当前状态（2026-07-01）
 
-- 本地当前分支：`dev`，与 `origin/dev` 同步
-- `baseline/continuous-learning`、`ngsg/novelty-gated-growth`：**仅本地**，尚未 push
-- `origin/codex/server-preprocess-cache`：**遗留服务器分支**，在 `4a958ae` 后与 `dev` 分叉
+| 分支 | HEAD | 说明 |
+| --- | --- | --- |
+| `dev` / `origin/dev` | `f90f6b7` | 已同步；含 catastrophic baseline 正式结果文档 |
+| `main` / `origin/main` | `7e3dd16` | **落后 dev**，待 dev 稳定后 merge |
+| `baseline/continuous-learning` | 已 push | 与 dev 同 lineage |
+| `ngsg/novelty-gated-growth` | 已 push | 与 dev 同 lineage |
+| `origin/codex/server-preprocess-cache` | 遗留 | **已 merge 进 dev**（`e32298e`），可删远程 |
 
-### codex 分支相对 dev 多出的功能提交（应并入 dev）
+codex 的 infra（预处理缓存、EMNIST idx fallback、训练日志）已在 dev；之后服务器只跟 `dev`。
 
-| 提交 | 内容 | 是否并入 dev |
-|------|------|-------------|
-| `42ababb` | paper-source 离线预处理缓存 | **是** — 全分支共享 infra |
-| `ce88943` | 训练 epoch 进度日志 | **是** |
-| `9fcd9f7` | EMNIST letters 从 raw idx 读取（绕过 torchvision 崩溃） | **是** |
-| `e86a263` | `SERVER_LATEST_STATUS.md` | **否** — 服务器运行时快照，不应长期留在 git |
+## 选分支（改代码前）
 
-### dev 相对 codex 多出的提交
+```
+baseline 配置/训练器/论文对齐？     → baseline/continuous-learning
+NGSG（S3 分区、SDPM、novelty）？    → ngsg/novelty-gated-growth
+data.py、缓存、日志、requirements？ → dev（或 feature 从 dev 拉 infra）
+```
 
-| 提交 | 内容 |
-|------|------|
-| `7e3dd16` | 删除 `.DS_Store` |
+## 日常 Git 流程
 
-**结论**：codex 上的 infra 代码应 merge 进 `dev`，之后服务器跟 `dev` 跑，不再维护独立 codex 分支。
-
-## 立即待办（一次性整理）
-
-按顺序执行，Agent 可在用户确认后直接操作：
+### 1. 开始工作
 
 ```bash
-# 1. 在 dev 上合并 codex 的功能提交（推荐 merge，保留历史）
-git checkout dev
 git fetch origin
-git merge origin/codex/server-preprocess-cache -m "merge: bring server infra (preprocess cache, EMNIST fix, logging) into dev"
+git checkout dev          # 或对应 feature 分支
+git pull origin dev       # feature 分支先 merge/rebase dev
+git branch --show-current
+```
 
-# 2. 解决冲突（若有）：dev 的 .DS_Store 删除应保留；不要重新引入 .DS_Store
-# 3. 若合并进了 SERVER_LATEST_STATUS.md，从 dev 删除并加入 .gitignore（可选）
-git rm --cached SERVER_LATEST_STATUS.md 2>/dev/null || true
+### 2. 提交（仅用户明确要求时 commit）
 
-# 4. 推送 dev
+- **不要**主动 commit，除非用户说「提交 / commit」
+- **不要**改 git config；**不要** `--no-verify` / force push main
+- commit 前并行检查：`git status`、`git diff`、`git log -5`
+- 消息 1–2 句，说明 **why**；不提交 `data/`、`logs/`、大 `.pt`、`SERVER_LATEST_STATUS.md`、`.DS_Store`
+
+PowerShell 提交示例：
+
+```powershell
+git add <paths>
+git commit -m "feat: short reason"
+git status
+```
+
+### 3. 推送
+
+```bash
 git push origin dev
-
-# 5. 更新 feature 分支到最新 dev
-git checkout baseline/continuous-learning
-git merge dev
+# feature 分支首次：
 git push -u origin baseline/continuous-learning
-
-git checkout ngsg/novelty-gated-growth
-git merge dev
-git push -u origin ngsg/novelty-gated-growth
-
-# 6. 确认服务器已切到 dev 且缓存任务正常后，删除远程 codex 分支
-git push origin --delete codex/server-preprocess-cache
 ```
 
-若用户希望历史更干净，可对 `42ababb`~`9fcd9f7` 做 cherry-pick 而非全量 merge；**不要** cherry-pick `e86a263`。
+**不要** push 除非用户明确要求。
 
-## 日常开发流程
+### 4. dev → main（里程碑）
 
-### 选分支
+dev 上 baseline 或文档已验证后：
 
+```bash
+git checkout main
+git pull origin main
+git merge dev -m "release: baseline catastrophic repro verified"
+git push origin main
+# 可选 tag：git tag v0.2.0-baseline-repro && git push origin v0.2.0-baseline-repro
 ```
-改 baseline 配置/训练器/对齐论文？  → baseline/continuous-learning
-改 NGSG 模块（S3 分区、SDPM、novelty）？ → ngsg/novelty-gated-growth
-改 data.py、缓存、日志、requirements？   → dev（或从 dev 拉 infra 到 feature 分支）
-```
 
-### Feature 分支生命周期
+### 5. Feature 分支生命周期
 
-1. 从最新 `dev` 创建或更新 feature 分支
-2. 小步 commit，消息说明是 baseline 还是 ngsg
-3. 功能验证通过后 merge 回 `dev`
-4. `dev` 稳定后 merge 到 `main` 并打 tag（如 `v0.2.0-baseline-repro`）
+1. 从最新 `dev` 创建/更新 feature 分支
+2. 小步 commit（baseline / ngsg 标明方向）
+3. 验证通过后 merge 回 `dev`
+4. `dev` 稳定后 merge 到 `main`
 
-### 目录约定
+### 6. 创建 PR
+
+本机 **未安装 `gh` CLI**。可选：
+
+- 用户安装 [GitHub CLI](https://cli.github.com/) 后用 `gh pr create`
+- 或 push 分支后在浏览器打开：`https://github.com/Wayneplp/NGSG-spyketorch/compare`
+
+PR 前检查：`git status`、与 base 的 `git diff main...HEAD`（或 `dev...HEAD`）、全部相关 commit。
+
+## 目录归属
 
 | 路径 | 归属 |
-|------|------|
-| `configs/baseline/` | baseline 分支主战场 |
-| `configs/ngsg/` | ngsg 分支主战场（dev 上可留 `.gitkeep`） |
+| --- | --- |
+| `configs/baseline/` | baseline |
+| `configs/ngsg/` | ngsg |
 | `src/trainers/baseline_trainer.py` | baseline + 共享 infra |
-| `src/continual/` | ngsg 专用逻辑 |
-| `src/utils/data.py` | 共享 infra，改时两边实验都要能跑 |
-| `approx/legacy_approx/` | 历史近似实现，非主路径 |
-| `experiments/`, `logs/`, `checkpoints/`, `results/`, `data/` | 本地/服务器产物，不进 git |
+| `src/continual/` | ngsg |
+| `src/utils/data.py` | 共享 infra |
+| `experiments/`, `logs/`, `checkpoints/`, `results/`, `data/` | 不进 git |
 
-## 租服务器部署
+## 服务器代码同步
 
-### 原则
+服务器跟 `dev`，不在 git 里维护运行时快照。SSH 跑实验完整流程见 [ngsg-server-experiments](../ngsg-server-experiments/SKILL.md)。
 
-- **服务器跟 `dev`**（或 `dev` 上的 release tag），不再维护 `codex/*` 长期分支
-- 服务器路径示例：`/root/autodl-tmp/NGSG-spyketorch-<short-sha>`
-- 运行时状态（tmux 会话名、缓存进度、日志路径）写在服务器本地，**不要** commit `SERVER_LATEST_STATUS.md`
-
-### 服务器首次 / 更新代码
+快速更新：
 
 ```bash
-cd /root/autodl-tmp/NGSG-spyketorch-*
-git fetch origin
-git checkout dev
-git pull origin dev
-pip install -r requirements.txt
+cd /root/autodl-tmp/NGSG-spyketorch-4a958ae
+git fetch origin && git checkout dev && git pull origin dev
 ```
 
-### 预处理缓存
+## 合并冲突优先级
 
-- 缓存目录：`data/preprocessed/paper_source/<hash>/`
-- 由 `src/utils/data.py` + `baseline_trainer.py` 写入，已在 codex 分支实现
-- 全量缓存用 tmux 长跑；检查进度：
-
-```bash
-tmux attach -t ngsg
-find data/preprocessed/paper_source -name '*.pt' | wc -l
-tail -n 50 logs/preprocess_*.log
-```
-
-### EMNIST 注意
-
-服务器上若 `torchvision.datasets.EMNIST(split="letters")` 崩溃，代码会 fallback 到 `data/emnist/EMNIST/raw/gzip/` 的 idx 文件。确保 raw 文件在服务器上存在。
-
-## 合并冲突处理优先级
-
-1. **infra 改进**（data.py、缓存、日志）→ 以功能更完整的版本为准，通常来自 dev/codex 合并结果
-2. **baseline 行为** → 以 `REPRODUCTION_PLAN.md` 和论文对齐为准
-3. **NGSG 行为** → 以 `NGSG_SNN_Implementation.md` 为准
-4. **不要** 为了消冲突而删除 winner-frequency / cache 逻辑
+1. infra（data.py、缓存、日志）→ 功能更完整者
+2. baseline → `README.md` / `CATASTROPHIC_FORGETTING_REPRODUCTION.md`
+3. NGSG → `NGSG_SNN_Implementation.md`（若仍存在）或 README §8
+4. **不要**为消冲突删掉 winner-frequency / cache 逻辑
 
 ## Agent 检查清单
 
-开始改代码前：
+**改代码前**
 
-- [ ] `git branch --show-current` 确认在正确分支
-- [ ] feature 分支是否基于最新 `dev`
-- [ ] 改动属于 baseline、ngsg 还是 infra
+- [ ] 当前分支正确
+- [ ] feature 基于最新 `dev`
+- [ ] 改动属 baseline / ngsg / infra
 
-提交 / PR 前：
+**提交/推送/PR 前**
 
-- [ ] 未提交 `data/`、`logs/`、`checkpoints/`、`.pt` 缓存
-- [ ] 未提交 `SERVER_LATEST_STATUS.md` 或 `.DS_Store`
-- [ ] baseline 改动未混入 NGSG 模块（除非是有意的 dev 集成）
-- [ ] 若改 `data.py` 或 trainer，本地或服务器至少 smoke test 一次
+- [ ] 用户已明确要求 commit/push/PR
+- [ ] 无数据集、日志、大 checkpoint、服务器状态文件
+- [ ] baseline 未混入 NGSG（除非 dev 有意集成）
 
-用户问「仓库怎么处理」时：
+**用户问「仓库怎么处理」**
 
-1. 说明各分支现状（见上文「当前已知状态」）
-2. 建议 merge codex → dev，push feature 分支，废弃 codex
-3. 给出下一步具体 git 命令，等用户确认再执行 destructive 操作（删远程分支）
+1. 报上表「当前状态」
+2. 说明 codex 已废弃、服务器跟 dev
+3. 若 `main` 落后，建议 dev 稳定后 merge
+4. destructive 操作（删远程分支）等用户确认
 
-## 参考文档
+## 待办（可选，非阻塞）
 
-- 复现计划：[REPRODUCTION_PLAN.md](../../REPRODUCTION_PLAN.md)
-- NGSG 设计：[NGSG_SNN_Implementation.md](../../NGSG_SNN_Implementation.md)
-- 仓库说明：[README.md](../../README.md)
+- [ ] 确认服务器已切到 `dev` 后：`git push origin --delete codex/server-preprocess-cache`
+- [ ] baseline 文档稳定后：`dev` → `main` merge + tag
+
+## 参考
+
+- 项目手册：[README.md](../../README.md)
+- 实验记录：[CATASTROPHIC_FORGETTING_REPRODUCTION.md](../../CATASTROPHIC_FORGETTING_REPRODUCTION.md)
+- 服务器实验：[ngsg-server-experiments/SKILL.md](../ngsg-server-experiments/SKILL.md)
+- Git 命令速查：[references/git-commands.md](references/git-commands.md)
