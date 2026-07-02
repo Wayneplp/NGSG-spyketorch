@@ -99,7 +99,7 @@ def _compute_selectivity(label_counts: Tensor) -> Tuple[Tensor, Tensor]:
 def _compute_neuron_importance(conv3_weight: Tensor, use_weight_strength: bool) -> Tensor:
     if not use_weight_strength:
         return torch.ones(conv3_weight.shape[0], dtype=torch.float32)
-    per_neuron = conv3_weight.detach().float().abs().reshape(conv3_weight.shape[0], -1).mean(dim=1)
+    per_neuron = conv3_weight.detach().float().cpu().abs().reshape(conv3_weight.shape[0], -1).mean(dim=1)
     return _max_normalize(per_neuron)
 
 
