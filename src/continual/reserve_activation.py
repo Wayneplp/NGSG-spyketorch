@@ -206,7 +206,6 @@ class ReserveActivation:
         *,
         potentials: Tensor,
         target_class: int,
-        *,
         num_neurons: int,
     ) -> Optional[int]:
         candidates = self._candidate_indices(target_class=target_class, num_neurons=num_neurons)
