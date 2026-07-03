@@ -1,6 +1,6 @@
 # NGSG SpykeTorch 项目手册
 
-最后更新：2026-07-03（同步 no-op 对照与下一步）
+最后更新：2026-07-03（统计对齐、paired 对照、novelty/reserve 实现与 medium 消融）
 
 这个仓库只保留两个主要 Markdown 入口：
 
@@ -27,29 +27,35 @@
 
 本机原始服务器产物副本：`experiments/server_paper_ch4_catastrophic_optimized_winnerlog_seed0/`，其中包含完整 `result.json`、`resolved_config.json`、`baseline_summary.csv` 和运行日志。该目录属于运行产物，不进入 git。
 
-## 0.1 当前推进状态（2026-07-03）
+## 0.1 当前推进状态（2026-07-03 晚）
 
-当前项目已经不再停留在“只复现 baseline”的阶段，但也还没有进入完整 NGSG full 实验。最新状态如下：
+当前 `dev` HEAD 为 `8a9e78a`（本地另有未提交的 reserve shape 修复）。项目处于 **medium 消融阶段**：统计对齐与 SDPM paired 对照已完成；reserve-only 与 full NGSG 在 Task2 首样本崩溃，待修复后重跑。
 
 | 模块 | 当前状态 | 判断 |
 | --- | --- | --- |
 | paper-source catastrophic baseline | 已完成完整服务器复现 | 遗忘趋势和论文基本对齐，可作为主 baseline。 |
-| winner-frequency logging | 已接入，并完成 medium no-op 对照 | seed 0 medium 下不扰动 baseline 学习行为，可作为后续统计基线。 |
-| winner label count | medium 已验证 | `paper_medium_partition_seed0` 中已导出 `winner_label_counts`，shape 为 200 x 10，总计 50,000 次 Task1 winner 记录。 |
-| `neuron_partition.py` | medium 已验证，并完成 no-op 对照 | 已从 Task1 winner counts 和 per-neuron label counts 计算 `f_i/q_i/I_i`，并划分 stable/shared/reserve/dead；seed 0 medium 下拟合 partition 不改变指标，full 结论仍需后续 600 epoch 实验确认。 |
-| SDPM gate | 已完成 medium 机制验证 | 确认能从 Task1 统计拟合，并在 Task2 R-STDP 更新中生效。 |
-| novelty gate / reserve activation | 尚未实现 | 这是后续补足新任务学习能力的关键。 |
-| full NGSG | 尚未开始正式 full 运行 | no-op 对照已完成；下一步是统一 SDPM 统计基础并实现 novelty/reserve。 |
+| winner-frequency / winner_label_counts | 已接入并完成 no-op 对照 | medium 下不扰动 baseline；`winner_label_counts` 200×10 已验证。 |
+| `occupancy_stats.py` + `neuron_partition.py` | 已实现并验证 | 统一计算 `f_i/q_i/I_i`；partition stable 61 / shared 59 / reserve 80。 |
+| SDPM gate（统计对齐后） | medium paired 已完成 | 与 partition 共用 occupancy；`q_i_mean≈0.504`，`unified_occupancy=True`。 |
+| `novelty_gate.py` | 已实现（`8a9e78a`） | 用 natural winner 的 `combined_score` 作为 novelty。 |
+| `reserve_activation.py` | 已实现并接入 Task2（`8a9e78a`）；**4D potentials shape bug 已本地修复** | Task2 首样本崩溃（48000 vs 200）；待 push 后重跑 #4/#6。 |
+| full NGSG（600 epoch） | 尚未开始 | 先完成 medium 五组消融再进 full。 |
 
-服务器 2 号 medium 对照结果：
+### 代码 commit 时间线（近期）
+
+| commit | 内容 |
+| --- | --- |
+| `4f03da0` | SDPM 与 partition 共用 `occupancy_stats.py`（`f_i/q_i/I_i` 对齐） |
+| `8a9e78a` | novelty gate + reserve activation + `configs/ngsg/` medium 消融 YAML |
+
+### 历史参考：对齐前 SDPM medium（`dev` 旧版，2026-07-02）
 
 | 配置 | Task1 after Task1 | Task1 after Task2 | Task2 after Task2 | Forgetting | Avg Acc |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | no-SDPM same-code | 79.6% | 65.9% | 60.3% | 13.7 pp | 63.10% |
-| SDPM-only | 79.6% | 68.1% | 54.8% | 11.5 pp | 61.45% |
-| SDPM - no-SDPM | 0.0 pp | +2.2 pp | -5.5 pp | -2.2 pp | -1.65 pp |
+| SDPM-only（未对齐 q_i） | 79.6% | 68.1% | 54.8% | 11.5 pp | 61.45% |
 
-结论：SDPM-only 已证明“旧任务保护”方向有效，但它会牺牲 Task2 学习；这符合模块定位。完整 NGSG 还需要 novelty gate 和 reserve activation 给新任务分配容量，不能只凭 SDPM-only 结果声称整体方法有效。
+这组结果说明旧版 SDPM 能保护 Task1，但明显牺牲 Task2。**不能**与下表新 paired 结果直接混用。
 
 
 服务器 medium partition 验证结果（`paper_medium_partition_seed0`，`dev@9d9bded`）：
@@ -63,27 +69,52 @@
 
 本机服务器产物副本：`experiments/server_paper_medium_partition_seed0/`。本机诊断产物：`experiments/diagnostics/paper_medium_partition_seed0/`，包含 `partition_validation.json` 和三张图：`f_i` 直方图、`q_i` vs `f_i` 散点图、dominant neuron per class 分布图。以上目录属于运行产物，不进入 git。
 
-## 0.2 当前实验结论和后续决策（2026-07-02）
+## 0.2 medium 消融矩阵（seed 0，`8a9e78a` 同 lineage）
 
-当前已经可以比较明确地得到三个实验结论：
+所有下列 medium 实验使用相同数据规模（每类 100 train/test）、Task1 S3 50 epoch、Task2 S3 10 epoch、seed 0、相同 feature checkpoint 与 C2 cache。
 
-1. **baseline 复现已经成立。** 完整 paper-source baseline 在服务器上跑完后，Task1 after Task2 为 48.42%，与论文参考 48.1% 基本对齐；forgetting 为 44.42 pp，也落在预期灾难性遗忘区间。因此后续论文叙事可以把这个结果作为主 baseline，而不是继续把主要精力花在“是否复现出遗忘”上。
-2. **统计链路已经有 medium 级证据。** `winner_label_counts`、`f_i/q_i/I_i` 和 stable/shared/reserve/dead partition 已能从真实 Task1 winner 统计中产生。尤其是 q_i 不能再用 decision map fallback 替代：fallback 会把 active neuron 的 q_i 近似推到 1.0，而真实 q_i 均值只有约 0.504，会明显高估类别选择性。
-3. **SDPM-only 的定位已经清楚。** medium 对照中，SDPM-only 把 Task1 after Task2 从 65.9% 提到 68.1%，forgetting 从 13.7 pp 降到 11.5 pp；但 Task2 after Task2 从 60.3% 降到 54.8%，Avg Acc 也下降。因此 SDPM 是“保护旧任务”的有效子模块，但不是完整 NGSG；只靠 SDPM 不能声称整体方法已经解决 continual learning。
+| # | 组别 | run name | SDPM | reserve | 状态 | Task1→1 | Task1→2 | Task2→2 | Forgetting | Avg Acc |
+| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | baseline / no-op | `noop_medium_*` / `paper_medium_partition_seed0` | off | off | ✅ | 77.2% | 69.8% | 58.7% | 7.4 pp | 64.25% |
+| 2 | no-SDPM paired | `paper_medium_no_sdpm_aligned_seed0` | off | off | ✅ | 77.2% | 69.8% | 58.7% | 7.4 pp | 64.25% |
+| 3 | SDPM aligned | `paper_medium_sdpm_aligned_seed0` | on | off | ✅ | 77.2% | **74.2%** | 57.8% | **3.0 pp** | **66.0%** |
+| 4 | reserve-only | `paper_medium_reserve_only_seed0` | off | on | ❌ Task2 崩溃 | - | - | - | - | - |
+| 5 | random reserve | `paper_medium_random_reserve_seed0` | off | random | ⬜ 待跑 | - | - | - | - | - |
+| 6 | full NGSG | `paper_medium_ngsg_seed0` | on | on | ❌ Task2 崩溃 | - | - | - | - | - |
 
-当前还不能写成论文结论的内容：
+**崩溃原因（#4/#6）：** C2 cache 路径下 `ctx["potentials"]` 为 4D `[1, 200, H, W]`，`aggregate_s3_neuron_potentials` 误 flatten 为 48000 维，与 partition mask（200）不匹配。已在本地 `reserve_activation.py` 修复（按 `s3_neurons=200` 解析 3D/4D shape）。
 
-- 不能声称完整 NGSG 已经有效，因为 novelty gate 和 reserve activation 还没有实现。
-- 不能把 medium 数字当作最终论文表格数字；medium 只用于机制诊断和消融预筛。
-- 不能把 SDPM-only 结果解释为整体性能提升；它目前体现的是稳定性-可塑性 trade-off。
+服务器路径：`/root/autodl-tmp/NGSG-spyketorch-4a958ae`，tmux 会话 `pw`。GPU 已空闲；修复 push 后重跑 #4 → #6。
 
-下一步优先级应该是：
+### 对齐后 SDPM vs no-SDPM（paired，`4f03da0`+）
 
-1. **固定当前 no-op 对照结论。** 当前 seed 0 medium 的 pure baseline、logging-only、logging+partition 三组结果完全一致，可作为统计模块 no-op 证据写入实验记录。
-2. **统一 SDPM 与 partition 的统计基础。** SDPM 后续应使用真实 `winner_label_counts` 计算出的 q_i、f_i 和 I_i，而不是 decision map fallback 或另一套临时 importance。
-3. **实现 novelty gate 和 reserve activation。** 先在 medium 上完成机制闭环，再做消融：baseline、SDPM-only、reserve/novelty-only、random reserve、full NGSG。
-4. **medium 消融稳定后再跑 full。** full 规模优先顺序建议为 baseline 已完成 -> full SDPM-only -> full NGSG；每次都同步 result、resolved_config、summary 和关键日志到本地记录。
-5. **维护服务器空间策略。** `/root/autodl-tmp` 已扩到 100G，当前足够继续 medium；full 实验前仍建议保留 `data/features/c2/`、`data/preprocessed/`，必要时迁移到 `/autodl-pub/data` 并软链接。
+| 对比项 | no-SDPM | SDPM aligned | 差值 |
+| --- | ---: | ---: | ---: |
+| Task1 after Task1 | 77.2% | 77.2% | 0.0 |
+| Task1 after Task2 | 69.8% | 74.2% | **+4.4 pp** |
+| Task2 after Task2 | 58.7% | 57.8% | -0.9 pp |
+| Forgetting | 7.4 pp | 3.0 pp | **-4.4 pp** |
+| Avg Acc | 64.25% | 66.0% | **+1.75 pp** |
+
+**当前可写结论：**
+
+1. **baseline 复现成立**（full 48.42% Task1 after Task2，见 §0）。
+2. **统计模块 no-op**（logging / partition 不改变 medium 指标）。
+3. **对齐后 SDPM 在 medium 上同时改善旧任务保持与平均准确率**；Task2 仅小幅下降 0.9 pp，优于对齐前 SDPM 的 trade-off。
+4. **partition + reserve 代码已接入**，但 medium 实验 #4/#6 因 potentials shape bug 未完成；修复后需重跑。
+
+**当前还不能写成论文结论的内容：**
+
+- reserve-only / full NGSG 的 medium 数字尚未产出（Task2 首样本崩溃）。
+- medium 数字仍不是 final 600/100 epoch 论文主表。
+- random reserve 对照尚未跑完。
+
+**下一步：**
+
+1. commit + push reserve shape 修复，服务器 `git pull` 后重跑 `paper_medium_reserve_only_seed0` → `paper_medium_ngsg_seed0`。
+2. 补跑 `paper_medium_random_reserve_seed0`。
+3. medium 稳定后启动 full 规模：baseline（已有）→ full SDPM aligned → full NGSG。
+4. 汇总 #4/#6 结果到 `CATASTROPHIC_FORGETTING_REPRODUCTION.md`。
 
 ## 0.3 Logging / partition no-op 对照（2026-07-03）
 
@@ -101,14 +132,11 @@
 
 ## 1. 当前目标
 
-当前目标已经从“确认统计模块是否 no-op”推进到“把统计基础接入真正的 NGSG 机制”：
-
 1. 以已完成的 paper-source catastrophic baseline 作为主对照。
-2. 使用已验证的 Task1 S3 统计基础：winner counts、winner label counts、`f_i/q_i/I_i` 和 neuron partition。
-3. 保留 no-op 对照作为诊断证据：seed 0 medium 下 logging 和 partition 不改变 baseline 指标。
-4. 将 SDPM 接到统一的 neuron partition / importance 统计基础上。
-5. 实现 novelty gate、reserve activation 和完整 NGSG medium 消融。
-6. medium 结果稳定后，再启动 full 规模 SDPM-only 和 full NGSG。
+2. 使用统一 occupancy 统计（`occupancy_stats.py`）：winner counts、winner label counts、`f_i/q_i/I_i`、partition。
+3. SDPM 保护旧任务突触更新；reserve activation 为高 novelty 的 Task2 样本分配 reserve 容量。
+4. 完成 medium 五组消融（baseline / SDPM / reserve-only / random reserve / full NGSG）。
+5. medium 稳定后启动 full 规模实验。
 
 当前不复现 joint training。旧的 frozen/Langevin 配置也已从 active YAML 中删除，只有论文对比确实需要时再重新建立。
 
@@ -122,15 +150,24 @@
 
 ## 3. 当前常用 YAML
 
-`configs/baseline/` 现在保留 5 个常用 YAML：
+### `configs/baseline/`
 
 | 配置 | 什么时候跑 | 说明 |
 | --- | --- | --- |
-| `configs/baseline/catastrophic_mnist_emnist.yaml` | 服务器正式完整 baseline | 完整 paper-source MNIST -> EMNIST catastrophic forgetting 流程。默认加载 `checkpoints/features/` 中已跟踪的小 checkpoint，并在本地生成/复用 C2 cache。 |
-| `configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml` | 只有 checkpoint 缺失或要重建时才跑 | feature-only 模式，只训练 S1/S2 并生成 checkpoint/C2 cache，跳过 S3 R-STDP 和评估。 |
-| `configs/baseline/catastrophic_mnist_emnist_paper_medium.yaml` | 本地中等规模诊断 | 每类 100 个样本，训练更短，用来检查代码路径和学习曲线，不作为最终论文数字。 |
-| `configs/baseline/catastrophic_mnist_emnist_paper_medium_sdpm.yaml` | SDPM / partition medium 诊断 | medium 规模，开启 SDPM gate 和 neuron partition，用来验证机制是否生效。 |
-| `configs/baseline/catastrophic_mnist_emnist_sdpm.yaml` | 服务器完整 SDPM-only 候选 | full 规模 SDPM-only 配置；当前不建议直接运行，先完成 medium 统计和 partition 验证。 |
+| `catastrophic_mnist_emnist.yaml` | 服务器正式完整 baseline | 完整 paper-source MNIST → EMNIST；600/100 epoch。 |
+| `catastrophic_mnist_emnist_feature_checkpoint.yaml` | checkpoint 缺失或重建时 | feature-only：只训 S1/S2，跳过 S3。 |
+| `catastrophic_mnist_emnist_paper_medium.yaml` | medium 诊断 | 每类 100 样本；纯 baseline。 |
+| `catastrophic_mnist_emnist_paper_medium_sdpm.yaml` | SDPM + partition medium | SDPM 与 reserve 开关见 YAML；当前 SDPM 默认 on。 |
+| `catastrophic_mnist_emnist_paper_medium_no_sdpm.yaml` | paired 对照 | 与 medium_sdpm 相同，仅 `sdpm_gate.enabled: false`。 |
+| `catastrophic_mnist_emnist_sdpm.yaml` | full SDPM-only | medium 消融稳定后再跑 full。 |
+
+### `configs/ngsg/`（`8a9e78a` 新增）
+
+| 配置 | SDPM | reserve | 用途 |
+| --- | --- | --- | --- |
+| `catastrophic_mnist_emnist_paper_medium_reserve_only.yaml` | off | on | 只验证 reserve 招募 |
+| `catastrophic_mnist_emnist_paper_medium_ngsg.yaml` | on | on | full NGSG medium |
+| `catastrophic_mnist_emnist_paper_medium_random_reserve.yaml` | off | random | reserve 随机对照 |
 
 已删除的旧 YAML：`catastrophic.yaml`、`joint_training.yaml`、`frozen_large_weights.yaml`、`langevin.yaml`、`catastrophic_mnist_emnist_probe.yaml`、`catastrophic_mnist_emnist_medium.yaml`、`catastrophic_mnist_emnist_medium_stabilizer_off.yaml`。
 
@@ -157,10 +194,23 @@ python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emni
 python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist_paper_medium.yaml --device auto --run-name paper_medium_source_port_seed0
 ```
 
-SDPM / partition 中等规模诊断：
+SDPM aligned medium：
 
 ```bash
-python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist_paper_medium_sdpm.yaml --device auto --run-name paper_medium_sdpm_only_seed0
+python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist_paper_medium_sdpm.yaml --device cuda --run-name paper_medium_sdpm_aligned_seed0
+```
+
+no-SDPM paired medium：
+
+```bash
+python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist_paper_medium_no_sdpm.yaml --device cuda --run-name paper_medium_no_sdpm_aligned_seed0
+```
+
+reserve-only / full NGSG medium：
+
+```bash
+python scripts/run_baseline.py --config configs/ngsg/catastrophic_mnist_emnist_paper_medium_reserve_only.yaml --device cuda --run-name paper_medium_reserve_only_seed0
+python scripts/run_baseline.py --config configs/ngsg/catastrophic_mnist_emnist_paper_medium_ngsg.yaml --device cuda --run-name paper_medium_ngsg_seed0
 ```
 
 重建 S1/S2 feature checkpoint 和 C2 cache：
@@ -232,26 +282,29 @@ paper-source 路线关键点：
 - 确认统计模块不改变 baseline 学习行为。
 - 已完成 medium no-op 对照：pure baseline、logging-only、logging+partition 三组指标完全一致。
 
-阶段 C：NGSG。当前状态：SDPM-only 已完成 medium 机制验证；novelty/reserve 尚未实现。
+阶段 C：NGSG。当前状态：SDPM 统计对齐与 paired 对照已完成；novelty/reserve 已接入；medium 消融 #4/#6 运行中。
 
-- 加入 SDPM soft protection。
-- 校准 novelty score。
-- 实现 class-local reserve activation。
-- 对比 baseline、SDPM only、NGSG only、random reserve 和完整 NGSG。
+- ✅ SDPM soft protection（对齐 occupancy 后 medium paired 验证）。
+- ✅ novelty score（`novelty_gate.py`，基于 partition `combined_score`）。
+- ✅ class-local reserve activation（`reserve_activation.py`，Task2 STDP 路由）。
+- ⏳ medium 消融：baseline、SDPM、reserve-only、random reserve、full NGSG。
+- ⬜ full 规模 SDPM / full NGSG。
 
 ## 8. NGSG 当前设计共识
 
 NGSG 的创新点不在于重写整个 SpykeTorch 网络，而是在已复现的 Antonov/Mozafari 三层 SNN 基础上，主要在 S3 输出层加入持续学习机制。
 
-核心模块：
+核心模块（`src/continual/`）：
 
-- winner-frequency tracker：统计 Task 1 中每个 S3 neuron 的获胜频率；已在 baseline 和 SDPM 路径中启用。
-- winner label count：统计每个 S3 neuron 对各类别的获胜次数；已接入 S3 训练统计，仍需结果产物验证。
-- neuron partition：根据获胜频率和类别选择性划分 stable/shared/reserve/dead neurons；`src/continual/neuron_partition.py` 已有第一版。
-- synaptic importance：估计旧任务关键连接的重要性；当前 SDPM 使用 winner frequency 和权重强度。
-- SDPM plasticity gate：对重要旧连接缩放 R-STDP 更新幅度；medium 已验证能保护 Task1，但会压制 Task2。
-- novelty detector：判断当前输入是否对旧网络足够新；尚未实现。
-- reserve activation：对高 novelty 样本调用低使用率、低旧任务重要性的 reserve neurons；尚未实现。
+| 模块 | 文件 | 状态 |
+| --- | --- | --- |
+| occupancy 统计 | `occupancy_stats.py` | ✅ `f_i/q_i/I_i` 统一来源 |
+| neuron partition | `neuron_partition.py` | ✅ stable/shared/reserve 划分 |
+| SDPM gate | `sdpm_gate.py` | ✅ 对齐 occupancy；Task2 缩放 R-STDP |
+| novelty gate | `novelty_gate.py` | ✅ natural winner 的 occupancy 分数 |
+| reserve activation | `reserve_activation.py` | ✅ 高 novelty → reserve STDP 路由 |
+
+Task2 训练顺序（full NGSG）：forward → novelty 判定 → 可选 reserve  reroute → reward/punish → SDPM 缩放更新。
 
 推荐第一版采用保守实现：先做 novelty-guided activation 和 plasticity gating，不急着声明真实动态新增结构。等 mask 或低权重 silent synapse 版本稳定后，再决定论文中是否使用 structural growth 的强表述。
 
@@ -295,7 +348,8 @@ NGSG 的创新点不在于重写整个 SpykeTorch 网络，而是在已复现的
 
 ## 12. 下一步优先级
 
-1. 将 SDPM 的 importance/gate 逻辑和 `NeuronPartition` 的统一统计基础对齐，避免后续 SDPM、novelty gate、reserve activation 各算一套指标。
-2. 实现 novelty gate 和 reserve activation，并先跑 medium 消融：baseline、SDPM-only、reserve/novelty-only、random reserve、full NGSG。
-3. medium 消融稳定后，再启动 full 规模实验并同步记录到 `CATASTROPHIC_FORGETTING_REPRODUCTION.md`。
-4. full 实验前继续维护服务器空间：不要删除 `checkpoints/`、`data/features/`、`data/preprocessed/`；必要时迁移大缓存到 `/autodl-pub/data` 并创建软链接。
+1. ⏳ 等 medium #4 reserve-only 与 #6 full NGSG 跑完，更新 §0.2 表格与 `CATASTROPHIC_FORGETTING_REPRODUCTION.md`。
+2. ⬜ 补跑 random reserve（`paper_medium_random_reserve_seed0`）。
+3. ⬜ 若 full NGSG medium 优于 SDPM-only，启动 full 规模 SDPM aligned 与 full NGSG。
+4. ⬜ 多 seed（0/1/2）重复关键 medium 配置。
+5. 维护服务器缓存与磁盘；实验产物同步到本机 `experiments/server_*` 副本（不进 git）。

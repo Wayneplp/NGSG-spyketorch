@@ -31,6 +31,34 @@ def _parse_recruit_roles(config: Mapping[str, Any]) -> Tuple[NeuronRole, ...]:
     return tuple(roles)
 
 
+def _resolve_num_s3_neurons(model: nn.Module, pot: Optional[Tensor] = None) -> int:
+    model_config = getattr(model, "config", None)
+    num_neurons = int(getattr(model_config, "s3_neurons", 0) or 0)
+    if num_neurons <= 0:
+        decision_map = getattr(model, "decision_map", None)
+        num_neurons = len(decision_map) if decision_map is not None else 0
+    if num_neurons <= 0 and pot is not None and pot.ndim >= 2:
+        if pot.ndim == 3:
+            num_neurons = int(pot.shape[0])
+        elif pot.shape[1] > 0:
+            num_neurons = int(pot.shape[1])
+    return num_neurons
+
+
+def potential_planes(pot: Tensor, num_neurons: int) -> Tensor:
+    """Return S3 potentials as [num_neurons, H, W]."""
+    pot = pot.detach().float().cpu()
+    if pot.ndim == 3 and int(pot.shape[0]) == num_neurons:
+        return pot
+    if pot.ndim == 4 and int(pot.shape[1]) == num_neurons:
+        return pot.sum(dim=0)
+    if pot.ndim == 4 and int(pot.shape[0]) == num_neurons:
+        return pot.sum(dim=1)
+    raise ValueError(
+        f"Unexpected S3 potential shape {tuple(pot.shape)} for num_neurons={num_neurons}."
+    )
+
+
 def aggregate_s3_neuron_potentials(model: nn.Module) -> Optional[Tensor]:
     ctx = getattr(model, "ctx", None)
     if not isinstance(ctx, dict):
@@ -38,16 +66,15 @@ def aggregate_s3_neuron_potentials(model: nn.Module) -> Optional[Tensor]:
     pot = ctx.get("potentials")
     if pot is None:
         return None
-    pot = pot.detach().float()
-    if pot.ndim == 3:
-        return pot.reshape(pot.shape[0], -1).sum(dim=1)
-    if pot.ndim == 2:
-        return pot.sum(dim=1)
-    return pot.reshape(-1)
+    num_neurons = _resolve_num_s3_neurons(model, pot)
+    if num_neurons <= 0:
+        return None
+    planes = potential_planes(pot, num_neurons)
+    return planes.reshape(num_neurons, -1).sum(dim=1)
 
 
-def build_winner_entry(pot: Tensor, neuron_idx: int, template_winner: Any) -> Any:
-    plane = pot[int(neuron_idx)]
+def build_winner_entry(pot: Tensor, neuron_idx: int, template_winner: Any, *, num_neurons: int) -> Any:
+    plane = potential_planes(pot, num_neurons)[int(neuron_idx)]
     flat = int(plane.argmax().item())
     height, width = int(plane.shape[0]), int(plane.shape[1])
     row, col = divmod(flat, max(width, 1))
@@ -179,8 +206,9 @@ class ReserveActivation:
         *,
         potentials: Tensor,
         target_class: int,
+        *,
+        num_neurons: int,
     ) -> Optional[int]:
-        num_neurons = int(potentials.numel())
         candidates = self._candidate_indices(target_class=target_class, num_neurons=num_neurons)
         if candidates.numel() == 0:
             return None
@@ -214,17 +242,27 @@ class ReserveActivation:
         if potentials is None or not isinstance(ctx, dict) or ctx.get("winners") is None:
             return False
 
-        recruited = self._select_neuron(potentials=potentials, target_class=int(target_class))
+        pot = ctx.get("potentials")
+        if pot is None:
+            return False
+        num_neurons = _resolve_num_s3_neurons(model, pot)
+        if num_neurons <= 0:
+            return False
+
+        recruited = self._select_neuron(
+            potentials=potentials,
+            target_class=int(target_class),
+            num_neurons=num_neurons,
+        )
         if recruited is None:
             self.stats["failed_recruitment"] = float(self.stats.get("failed_recruitment", 0.0) + 1.0)
             return False
 
-        pot = ctx.get("potentials")
-        if pot is None:
-            return False
         natural_winners = ctx["winners"]
         template = natural_winners[0] if len(natural_winners) > 0 else (int(recruited),)
-        ctx["winners"] = [build_winner_entry(pot.detach().float().cpu(), recruited, template)]
+        ctx["winners"] = [
+            build_winner_entry(pot, recruited, template, num_neurons=num_neurons)
+        ]
 
         self.stats["recruited_updates"] = float(self.stats.get("recruited_updates", 0.0) + 1.0)
         return True
