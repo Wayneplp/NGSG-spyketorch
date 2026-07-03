@@ -81,8 +81,14 @@ class BaselineTrainer:
             stage_name="task1",
             sdpm_gate=sdpm_gate,
         )
-        sdpm_gate = self.fit_sdpm_gate_after_task1(model, config, task1_training_stats, sdpm_gate)
         neuron_partition = self.fit_neuron_partition_after_task1(model, config, task1_training_stats)
+        sdpm_gate = self.fit_sdpm_gate_after_task1(
+            model,
+            config,
+            task1_training_stats,
+            sdpm_gate,
+            neuron_partition=neuron_partition,
+        )
         if neuron_partition is not None and neuron_partition.enabled:
             task1_training_stats["neuron_partition"] = neuron_partition.to_dict(include_arrays=True)
 
@@ -282,29 +288,39 @@ class BaselineTrainer:
         config: Mapping[str, Any],
         task1_training_stats: Mapping[str, Any],
         sdpm_gate: Optional[SDPMGate],
+        *,
+        neuron_partition: Optional[NeuronPartition] = None,
     ) -> Optional[SDPMGate]:
         sdpm_cfg = config.get("continual", {}).get("sdpm_gate", {})
         if not bool(sdpm_cfg.get("enabled", False)):
             return sdpm_gate
 
-        winner_counts = task1_training_stats.get("output_training", {}).get("winner_counts")
+        output_training = task1_training_stats.get("output_training", {})
+        winner_counts = output_training.get("winner_counts")
         if winner_counts is None:
             raise ValueError(
                 "SDPM gate is enabled but Task 1 winner counts are missing. "
                 "Ensure winner_frequency_log is enabled or S3 winner tracking is active."
             )
 
+        winner_label_counts = output_training.get("winner_label_counts")
+        num_classes = int(config.get("model", {}).get("num_classes", 0)) or None
         fitted = SDPMGate.fit_from_task1_stats(
             model=model,
             winner_counts=winner_counts,
             config=sdpm_cfg,
+            winner_label_counts=winner_label_counts,
+            num_classes=num_classes,
             global_seed=int(config.get("seed", 0)),
+            neuron_partition=neuron_partition,
         )
         summary = fitted.summarize()
         print(
             "[sdpm gate] fitted from Task 1 stats: "
             f"protected_fraction={summary.get('protected_fraction', 0.0):.4f} "
             f"gate_mean={summary.get('gate_mean', 0.0):.4f} "
+            f"q_i_mean={summary.get('occupancy_q_i_mean', 0.0):.4f} "
+            f"unified_occupancy={summary.get('unified_occupancy_stats', False)} "
             f"random_protection={summary.get('random_protection', False)}",
             flush=True,
         )

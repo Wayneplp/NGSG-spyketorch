@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 import torch
 from torch import Tensor, nn
 
+from .occupancy_stats import Task1OccupancyStats, fit_task1_occupancy_stats, max_normalize
 
-def _max_normalize(values: Tensor, eps: float = 1e-8) -> Tensor:
-    values = values.clamp(min=0.0)
-    peak = float(values.max().item()) if values.numel() else 0.0
-    if peak <= eps:
-        return torch.zeros_like(values)
-    return values / peak
+if TYPE_CHECKING:
+    from .neuron_partition import NeuronPartition
 
 
 def _parse_apply_stages(config: Mapping[str, Any]) -> Tuple[str, ...]:
@@ -29,6 +26,7 @@ class SDPMGateConfig:
     gamma: float = 1.0
     protect_top_fraction: float = 0.3
     use_winner_frequency: bool = True
+    use_selectivity: bool = True
     use_weight_strength: bool = True
     random_protection: bool = False
     apply_stages: Tuple[str, ...] = ("task2",)
@@ -45,6 +43,7 @@ class SDPMGateConfig:
             gamma=float(config.get("gamma", 1.0)),
             protect_top_fraction=float(config.get("protect_top_fraction", 0.3)),
             use_winner_frequency=bool(importance_cfg.get("use_winner_frequency", True)),
+            use_selectivity=bool(importance_cfg.get("use_selectivity", True)),
             use_weight_strength=bool(importance_cfg.get("use_weight_strength", True)),
             random_protection=bool(config.get("random_protection", False)),
             apply_stages=_parse_apply_stages(config),
@@ -61,6 +60,7 @@ class SDPMGate:
     importance: Tensor
     gate: Tensor
     config: SDPMGateConfig
+    occupancy: Optional[Task1OccupancyStats] = None
     drift_stats: Dict[str, float] = field(default_factory=dict)
 
     @property
@@ -85,7 +85,10 @@ class SDPMGate:
         winner_counts: Sequence[int],
         config: Mapping[str, Any],
         *,
+        winner_label_counts: Optional[Union[Sequence[Sequence[int]], Tensor]] = None,
+        num_classes: Optional[int] = None,
         global_seed: Optional[int] = None,
+        neuron_partition: Optional["NeuronPartition"] = None,
     ) -> "SDPMGate":
         gate_config = SDPMGateConfig.from_mapping(config)
         if not gate_config.enabled:
@@ -95,25 +98,55 @@ class SDPMGate:
                 config=gate_config,
             )
 
+        if neuron_partition is not None and neuron_partition.enabled:
+            return cls.fit_from_occupancy(
+                neuron_partition.occupancy,
+                gate_config,
+                conv3_weight=model.conv3.weight.detach(),
+                random_seed=gate_config.random_seed if gate_config.random_seed is not None else global_seed,
+            )
+
         conv3 = getattr(model, "conv3", None)
         if conv3 is None or not hasattr(conv3, "weight"):
             raise ValueError("SDPMGate requires a paper-source model with conv3 weights.")
 
-        seed = gate_config.random_seed if gate_config.random_seed is not None else global_seed
-        return cls.fit_from_weights(
+        resolved_num_classes = num_classes
+        if resolved_num_classes is None:
+            model_config = getattr(model, "config", None)
+            resolved_num_classes = getattr(model_config, "num_classes", None)
+        if resolved_num_classes is None:
+            raise ValueError("num_classes is required for unified SDPM occupancy stats.")
+
+        if winner_label_counts is None:
+            raise ValueError(
+                "SDPM gate requires Task 1 winner_label_counts for unified occupancy stats. "
+                "Enable winner_frequency_log or neuron_partition tracking."
+            )
+
+        occupancy = fit_task1_occupancy_stats(
             conv3_weight=conv3.weight.detach(),
             winner_counts=winner_counts,
-            config=gate_config,
+            winner_label_counts=winner_label_counts,
+            num_classes=int(resolved_num_classes),
+            decision_map=getattr(model, "decision_map", None),
+            use_weight_strength=gate_config.use_weight_strength,
+            allow_decision_map_fallback=False,
+        )
+        seed = gate_config.random_seed if gate_config.random_seed is not None else global_seed
+        return cls.fit_from_occupancy(
+            occupancy,
+            gate_config,
+            conv3_weight=conv3.weight.detach(),
             random_seed=seed,
         )
 
     @classmethod
-    def fit_from_weights(
+    def fit_from_occupancy(
         cls,
-        conv3_weight: Tensor,
-        winner_counts: Sequence[int],
+        occupancy: Task1OccupancyStats,
         config: SDPMGateConfig | Mapping[str, Any],
         *,
+        conv3_weight: Tensor,
         random_seed: Optional[int] = None,
     ) -> "SDPMGate":
         if not isinstance(config, SDPMGateConfig):
@@ -128,19 +161,63 @@ class SDPMGate:
                 config=gate_config,
             )
 
-        weight = conv3_weight.detach().float().cpu()
-        num_neurons = int(weight.shape[0])
-        counts = [int(winner_counts[idx]) if idx < len(winner_counts) else 0 for idx in range(num_neurons)]
-
-        importance = cls._build_importance(weight, counts, gate_config, random_seed=random_seed)
+        importance = cls._build_importance(
+            conv3_weight.detach().float().cpu(),
+            occupancy,
+            gate_config,
+            random_seed=random_seed,
+        )
         gate = cls._importance_to_gate(importance, gate_config)
-        return cls(importance=importance, gate=gate, config=gate_config)
+        return cls(importance=importance, gate=gate, config=gate_config, occupancy=occupancy)
+
+    @classmethod
+    def fit_from_weights(
+        cls,
+        conv3_weight: Tensor,
+        winner_counts: Sequence[int],
+        config: SDPMGateConfig | Mapping[str, Any],
+        *,
+        winner_label_counts: Optional[Union[Sequence[Sequence[int]], Tensor]] = None,
+        num_classes: Optional[int] = None,
+        random_seed: Optional[int] = None,
+    ) -> "SDPMGate":
+        if not isinstance(config, SDPMGateConfig):
+            gate_config = SDPMGateConfig.from_mapping(config)
+        else:
+            gate_config = config
+
+        if not gate_config.enabled:
+            return cls(
+                importance=torch.tensor([]),
+                gate=torch.tensor([]),
+                config=gate_config,
+            )
+
+        if winner_label_counts is None or num_classes is None:
+            raise ValueError(
+                "fit_from_weights now requires winner_label_counts and num_classes for unified occupancy stats."
+            )
+
+        occupancy = fit_task1_occupancy_stats(
+            conv3_weight=conv3_weight,
+            winner_counts=winner_counts,
+            winner_label_counts=winner_label_counts,
+            num_classes=int(num_classes),
+            use_weight_strength=gate_config.use_weight_strength,
+            allow_decision_map_fallback=False,
+        )
+        return cls.fit_from_occupancy(
+            occupancy,
+            gate_config,
+            conv3_weight=conv3_weight,
+            random_seed=random_seed,
+        )
 
     @classmethod
     def _build_importance(
         cls,
         conv3_weight: Tensor,
-        winner_counts: Sequence[int],
+        occupancy: Task1OccupancyStats,
         config: SDPMGateConfig,
         *,
         random_seed: Optional[int] = None,
@@ -156,30 +233,23 @@ class SDPMGate:
             importance_flat[selected] = 1.0
             return importance_flat.reshape(conv3_weight.shape)
 
-        neuron_freq = torch.tensor(winner_counts, dtype=torch.float32)
-        if neuron_freq.numel() < conv3_weight.shape[0]:
-            padded = torch.zeros(conv3_weight.shape[0], dtype=torch.float32)
-            padded[: neuron_freq.numel()] = neuron_freq
-            neuron_freq = padded
-        elif neuron_freq.numel() > conv3_weight.shape[0]:
-            neuron_freq = neuron_freq[: conv3_weight.shape[0]]
-
-        if config.use_winner_frequency:
-            neuron_importance = _max_normalize(neuron_freq)
-        else:
-            neuron_importance = torch.ones_like(neuron_freq)
+        neuron_score = occupancy.neuron_occupancy_score(
+            use_frequency=config.use_winner_frequency,
+            use_selectivity=config.use_selectivity,
+            use_weight_strength=config.use_weight_strength,
+        )
 
         synaptic_strength = conv3_weight.abs()
         if config.use_weight_strength:
             normalized_strength = torch.stack(
-                [_max_normalize(synaptic_strength[neuron_idx]) for neuron_idx in range(synaptic_strength.shape[0])],
+                [max_normalize(synaptic_strength[neuron_idx]) for neuron_idx in range(synaptic_strength.shape[0])],
                 dim=0,
             )
         else:
             normalized_strength = torch.ones_like(synaptic_strength)
 
-        importance = neuron_importance.view(-1, 1, 1, 1) * normalized_strength
-        importance = _max_normalize(importance)
+        importance = neuron_score.view(-1, 1, 1, 1) * normalized_strength
+        importance = max_normalize(importance)
 
         protect_fraction = float(config.protect_top_fraction)
         if 0.0 < protect_fraction < 1.0:
@@ -187,12 +257,12 @@ class SDPMGate:
             protect_count = max(1, int(round(flat.numel() * protect_fraction)))
             threshold = torch.topk(flat, protect_count).values.min()
             importance = torch.where(importance >= threshold, importance, torch.zeros_like(importance))
-            importance = _max_normalize(importance)
+            importance = max_normalize(importance)
         return importance
 
     @classmethod
     def _importance_to_gate(cls, importance: Tensor, config: SDPMGateConfig) -> Tensor:
-        normalized = _max_normalize(importance)
+        normalized = max_normalize(importance)
         gamma = float(config.gamma)
         g_min = float(config.g_min)
         return g_min + (1.0 - g_min) * torch.pow(1.0 - normalized, gamma)
@@ -265,7 +335,7 @@ class SDPMGate:
         gate_flat = self.gate.reshape(-1)
         importance_flat = self.importance.reshape(-1)
         protected_fraction = float((importance_flat > 0).float().mean().item())
-        return {
+        summary = {
             "enabled": True,
             "g_min": self.config.g_min,
             "gamma": self.config.gamma,
@@ -280,4 +350,16 @@ class SDPMGate:
             "importance_max": float(importance_flat.max().item()),
             "drift_stats": dict(self.drift_stats),
             "config": asdict(self.config),
+            "unified_occupancy_stats": self.occupancy is not None,
         }
+        if self.occupancy is not None:
+            active = self.occupancy.f_i > 0
+            summary.update(
+                {
+                    "occupancy_f_i_mean": float(self.occupancy.f_i.mean().item()),
+                    "occupancy_q_i_mean": float(self.occupancy.q_i[active].mean().item()) if active.any() else 0.0,
+                    "occupancy_I_i_mean": float(self.occupancy.I_i.mean().item()),
+                    "occupancy_combined_score_mean": float(self.occupancy.combined_score().mean().item()),
+                }
+            )
+        return summary

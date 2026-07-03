@@ -7,6 +7,11 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union
 import torch
 from torch import Tensor, nn
 
+from .occupancy_stats import (
+    Task1OccupancyStats,
+    fit_task1_occupancy_stats,
+)
+
 
 class NeuronRole(IntEnum):
     RESERVE = 0
@@ -23,103 +28,12 @@ ROLE_NAMES: Dict[NeuronRole, str] = {
 }
 
 
-def _max_normalize(values: Tensor, eps: float = 1e-8) -> Tensor:
-    values = values.clamp(min=0.0)
-    peak = float(values.max().item()) if values.numel() else 0.0
-    if peak <= eps:
-        return torch.zeros_like(values)
-    return values / peak
-
-
-def _as_2d_label_counts(
-    winner_label_counts: Optional[Union[Sequence[Sequence[int]], Tensor]],
-    num_neurons: int,
-    num_classes: int,
-) -> Tensor:
-    if winner_label_counts is None:
-        return torch.zeros(num_neurons, num_classes, dtype=torch.float32)
-
-    if isinstance(winner_label_counts, Tensor):
-        counts = winner_label_counts.detach().float().cpu()
-    else:
-        counts = torch.tensor(list(winner_label_counts), dtype=torch.float32)
-
-    if counts.ndim == 1:
-        if counts.numel() != num_neurons * num_classes:
-            raise ValueError(
-                "1D winner_label_counts must have length num_neurons * num_classes "
-                f"({num_neurons * num_classes}), got {counts.numel()}."
-            )
-        counts = counts.reshape(num_neurons, num_classes)
-    elif counts.ndim != 2:
-        raise ValueError("winner_label_counts must be 2D [num_neurons, num_classes].")
-
-    if counts.shape[0] < num_neurons:
-        padded = torch.zeros(num_neurons, counts.shape[1], dtype=torch.float32)
-        padded[: counts.shape[0]] = counts
-        counts = padded
-    elif counts.shape[0] > num_neurons:
-        counts = counts[:num_neurons]
-
-    if counts.shape[1] < num_classes:
-        padded = torch.zeros(counts.shape[0], num_classes, dtype=torch.float32)
-        padded[:, : counts.shape[1]] = counts
-        counts = padded
-    elif counts.shape[1] > num_classes:
-        counts = counts[:, :num_classes]
-
-    return counts
-
-
 def _percentile_threshold(values: Tensor, percentile: float) -> float:
     active = values[values > 0]
     if active.numel() == 0:
         return 0.0
     percentile = float(min(max(percentile, 0.0), 1.0))
     return float(torch.quantile(active, percentile).item())
-
-
-def _winner_counts_tensor(winner_counts: Sequence[int], num_neurons: int) -> Tensor:
-    counts = torch.tensor(
-        [int(winner_counts[idx]) if idx < len(winner_counts) else 0 for idx in range(num_neurons)],
-        dtype=torch.float32,
-    )
-    return counts
-
-
-def _compute_selectivity(label_counts: Tensor) -> Tuple[Tensor, Tensor]:
-    totals = label_counts.sum(dim=1)
-    safe_totals = totals.clamp(min=1.0)
-    dominant_counts, dominant_labels = label_counts.max(dim=1)
-    q_i = dominant_counts / safe_totals
-    q_i = torch.where(totals > 0, q_i, torch.zeros_like(q_i))
-    return q_i, dominant_labels
-
-
-def _compute_neuron_importance(conv3_weight: Tensor, use_weight_strength: bool) -> Tensor:
-    if not use_weight_strength:
-        return torch.ones(conv3_weight.shape[0], dtype=torch.float32)
-    per_neuron = conv3_weight.detach().float().cpu().abs().reshape(conv3_weight.shape[0], -1).mean(dim=1)
-    return _max_normalize(per_neuron)
-
-
-def _infer_label_counts_from_decision_map(
-    winner_counts: Tensor,
-    decision_map: Sequence[int],
-    num_classes: int,
-) -> Tensor:
-    num_neurons = int(winner_counts.numel())
-    label_counts = torch.zeros(num_neurons, num_classes, dtype=torch.float32)
-    for neuron_idx in range(num_neurons):
-        wins = float(winner_counts[neuron_idx].item())
-        if wins <= 0:
-            continue
-        if neuron_idx >= len(decision_map):
-            continue
-        mapped_label = int(decision_map[neuron_idx])
-        if 0 <= mapped_label < num_classes:
-            label_counts[neuron_idx, mapped_label] = wins
-    return label_counts
 
 
 @dataclass
@@ -151,10 +65,7 @@ class NeuronPartition:
     """Partition S3 neurons into stable / shared / reserve pools after Task 1."""
 
     roles: Tensor
-    f_i: Tensor
-    q_i: Tensor
-    I_i: Tensor
-    dominant_labels: Tensor
+    occupancy: Task1OccupancyStats
     config: NeuronPartitionConfig
     thresholds: Dict[str, float] = field(default_factory=dict)
 
@@ -166,16 +77,35 @@ class NeuronPartition:
     def num_neurons(self) -> int:
         return int(self.roles.numel())
 
+    @property
+    def f_i(self) -> Tensor:
+        return self.occupancy.f_i
+
+    @property
+    def q_i(self) -> Tensor:
+        return self.occupancy.q_i
+
+    @property
+    def I_i(self) -> Tensor:
+        return self.occupancy.I_i
+
+    @property
+    def dominant_labels(self) -> Tensor:
+        return self.occupancy.dominant_labels
+
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> "NeuronPartition":
         partition_config = NeuronPartitionConfig.from_mapping(config)
         if not partition_config.enabled:
-            return cls(
-                roles=torch.tensor([], dtype=torch.int64),
+            empty = Task1OccupancyStats(
                 f_i=torch.tensor([]),
                 q_i=torch.tensor([]),
                 I_i=torch.tensor([]),
                 dominant_labels=torch.tensor([], dtype=torch.int64),
+            )
+            return cls(
+                roles=torch.tensor([], dtype=torch.int64),
+                occupancy=empty,
                 config=partition_config,
             )
         raise ValueError(
@@ -239,21 +169,41 @@ class NeuronPartition:
         if not partition_config.enabled:
             return cls.from_config({"enabled": False})
 
-        num_neurons = int(conv3_weight.shape[0])
-        f_i = _winner_counts_tensor(winner_counts, num_neurons)
-        label_counts = _as_2d_label_counts(winner_label_counts, num_neurons, num_classes)
-        if float(label_counts.sum().item()) <= 0.0 and decision_map is not None:
-            label_counts = _infer_label_counts_from_decision_map(f_i, decision_map, num_classes)
-
-        q_i, dominant_labels = _compute_selectivity(label_counts)
-        I_i = _compute_neuron_importance(conv3_weight, partition_config.use_weight_strength)
-        roles, thresholds = cls._assign_roles(f_i, q_i, partition_config)
+        occupancy = fit_task1_occupancy_stats(
+            conv3_weight=conv3_weight,
+            winner_counts=winner_counts,
+            winner_label_counts=winner_label_counts,
+            num_classes=num_classes,
+            decision_map=decision_map,
+            use_weight_strength=partition_config.use_weight_strength,
+            allow_decision_map_fallback=True,
+        )
+        roles, thresholds = cls._assign_roles(occupancy.f_i, occupancy.q_i, partition_config)
         return cls(
             roles=roles,
-            f_i=f_i,
-            q_i=q_i,
-            I_i=I_i,
-            dominant_labels=dominant_labels,
+            occupancy=occupancy,
+            config=partition_config,
+            thresholds=thresholds,
+        )
+
+    @classmethod
+    def fit_from_occupancy(
+        cls,
+        occupancy: Task1OccupancyStats,
+        config: NeuronPartitionConfig | Mapping[str, Any],
+    ) -> "NeuronPartition":
+        if not isinstance(config, NeuronPartitionConfig):
+            partition_config = NeuronPartitionConfig.from_mapping(config)
+        else:
+            partition_config = config
+
+        if not partition_config.enabled:
+            return cls.from_config({"enabled": False})
+
+        roles, thresholds = cls._assign_roles(occupancy.f_i, occupancy.q_i, partition_config)
+        return cls(
+            roles=roles,
+            occupancy=occupancy,
             config=partition_config,
             thresholds=thresholds,
         )
@@ -311,7 +261,7 @@ class NeuronPartition:
 
     def combined_score(self) -> Tensor:
         """Neuron-level old-task occupancy score used by SDPM / reserve routing."""
-        return _max_normalize(self.f_i) * self.q_i * self.I_i
+        return self.occupancy.combined_score()
 
     def counts_by_role(self) -> Dict[str, int]:
         counts: Dict[str, int] = {name: 0 for name in ROLE_NAMES.values()}

@@ -67,6 +67,7 @@ continual:
     apply_stages: [task2]
     importance:
       use_winner_frequency: true
+      use_selectivity: true
       use_weight_strength: true
     g_min: 0.05
     gamma: 1.0
