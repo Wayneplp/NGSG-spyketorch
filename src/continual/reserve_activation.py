@@ -111,6 +111,11 @@ class ReserveActivationConfig:
     homeostatic_boost_start_epoch: int = 1
     homeostatic_boost_decay_epochs: int = 0
     homeostatic_boost_roles: Tuple[NeuronRole, ...] = (NeuronRole.RESERVE,)
+    weight_transfer: bool = False
+    weight_transfer_source_roles: Tuple[NeuronRole, ...] = (NeuronRole.STABLE,)
+    weight_transfer_target_roles: Tuple[NeuronRole, ...] = (NeuronRole.RESERVE,)
+    weight_transfer_noise_sigma: float = 0.05
+    weight_transfer_class_local: bool = True
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "ReserveActivationConfig":
@@ -147,6 +152,15 @@ class ReserveActivationConfig:
             homeostatic_boost_roles=_parse_recruit_roles(
                 {"recruit_roles": config.get("homeostatic_boost_roles", config.get("recruit_roles", ("reserve",)))}
             ),
+            weight_transfer=bool(config.get("weight_transfer", False)),
+            weight_transfer_source_roles=_parse_recruit_roles(
+                {"recruit_roles": config.get("weight_transfer_source_roles", ("stable",))}
+            ),
+            weight_transfer_target_roles=_parse_recruit_roles(
+                {"recruit_roles": config.get("weight_transfer_target_roles", ("reserve",))}
+            ),
+            weight_transfer_noise_sigma=float(config.get("weight_transfer_noise_sigma", 0.05)),
+            weight_transfer_class_local=bool(config.get("weight_transfer_class_local", True)),
         )
 
 
@@ -220,6 +234,60 @@ class ReserveActivation:
             and self.config.homeostatic_boost
             and float(self.config.homeostatic_boost_initial) > 0.0
         )
+
+    def transfer_weights(self, model: nn.Module) -> None:
+        if not self.config.weight_transfer:
+            return
+
+        conv3 = getattr(model, "conv3", None)
+        if conv3 is None or not hasattr(conv3, "weight"):
+            self.stats["weight_transfer_unavailable"] = 1.0
+            return
+
+        weight = conv3.weight
+        num_neurons = int(weight.shape[0])
+        num_classes = max(num_neurons // self.neurons_per_class, 1)
+
+        source_mask = torch.zeros(num_neurons, dtype=torch.bool)
+        for role in self.config.weight_transfer_source_roles:
+            source_mask |= self.partition.mask_for_role(role)
+
+        target_mask = torch.zeros(num_neurons, dtype=torch.bool)
+        for role in self.config.weight_transfer_target_roles:
+            target_mask |= self.partition.mask_for_role(role)
+
+        if int(source_mask.sum().item()) == 0 or int(target_mask.sum().item()) == 0:
+            self.stats["weight_transfer_no_candidates"] = 1.0
+            return
+
+        scores = self.partition.combined_score()
+        sigma = float(self.config.weight_transfer_noise_sigma)
+        transferred = 0
+
+        for class_idx in range(num_classes):
+            if self.config.weight_transfer_class_local:
+                block = list(self._class_block(class_idx, num_neurons))
+            else:
+                block = list(range(num_neurons))
+
+            source_indices = [i for i in block if bool(source_mask[i].item())]
+            target_indices = [i for i in block if bool(target_mask[i].item())]
+
+            if not source_indices or not target_indices:
+                continue
+
+            best_source = source_indices[int(scores[source_indices].argmax().item())]
+            source_weight = weight[best_source].clone()
+
+            for target_idx in target_indices:
+                noise = torch.randn_like(source_weight) * sigma
+                weight[target_idx] = source_weight + noise
+                transferred += 1
+
+        self.stats["weight_transfer_source_count"] = float(source_mask.sum().item())
+        self.stats["weight_transfer_target_count"] = float(target_mask.sum().item())
+        self.stats["weight_transfer_transferred"] = float(transferred)
+        self.stats["weight_transfer_noise_sigma"] = sigma
 
     def _class_block(self, class_idx: int, num_neurons: int) -> range:
         start = int(class_idx) * self.neurons_per_class
@@ -483,6 +551,18 @@ class ReserveActivation:
                 "active_epochs": float(self.stats.get("homeostatic_boost_epochs", 0.0)),
                 "last_scale": float(self.stats.get("homeostatic_boost_last_scale", 0.0)),
                 "boosted_neurons": float(self.stats.get("homeostatic_boost_neurons", 0.0)),
+            },
+            "weight_transfer": {
+                "enabled": self.config.weight_transfer,
+                "source_roles": [ROLE_NAMES[role] for role in self.config.weight_transfer_source_roles],
+                "target_roles": [ROLE_NAMES[role] for role in self.config.weight_transfer_target_roles],
+                "noise_sigma": self.config.weight_transfer_noise_sigma,
+                "class_local": self.config.weight_transfer_class_local,
+                "source_count": float(self.stats.get("weight_transfer_source_count", 0.0)),
+                "target_count": float(self.stats.get("weight_transfer_target_count", 0.0)),
+                "transferred": float(self.stats.get("weight_transfer_transferred", 0.0)),
+                "unavailable": float(self.stats.get("weight_transfer_unavailable", 0.0)),
+                "no_candidates": float(self.stats.get("weight_transfer_no_candidates", 0.0)),
             },
             "config": asdict(self.config),
             "novelty_gate": self.novelty_gate.summarize(),

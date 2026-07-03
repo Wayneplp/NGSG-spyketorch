@@ -90,6 +90,16 @@ class BaselineTrainer:
             neuron_partition=neuron_partition,
         )
         reserve_activation = self.fit_reserve_activation_after_task1(model, config, neuron_partition)
+        if reserve_activation is not None and reserve_activation.enabled:
+            reserve_activation.transfer_weights(model)
+            if reserve_activation.config.weight_transfer:
+                print(
+                    f"[weight transfer] source={reserve_activation.stats.get('weight_transfer_source_count', 0):.0f} "
+                    f"target={reserve_activation.stats.get('weight_transfer_target_count', 0):.0f} "
+                    f"transferred={reserve_activation.stats.get('weight_transfer_transferred', 0):.0f} "
+                    f"sigma={reserve_activation.stats.get('weight_transfer_noise_sigma', 0):.3f}",
+                    flush=True,
+                )
         if neuron_partition is not None and neuron_partition.enabled:
             task1_training_stats["neuron_partition"] = neuron_partition.to_dict(include_arrays=True)
 
