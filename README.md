@@ -1,6 +1,6 @@
 # NGSG SpykeTorch 项目手册
 
-最后更新：2026-07-03（统计对齐、paired 对照、novelty/reserve 实现与 medium 消融）
+最后更新：2026-07-03（medium 六组消融 #1–#4/#6 已完成；reserve Task2 掉点诊断）
 
 这个仓库只保留两个主要 Markdown 入口：
 
@@ -29,17 +29,17 @@
 
 ## 0.1 当前推进状态（2026-07-03 晚）
 
-当前 `dev` HEAD 为 `8a9e78a`（本地另有未提交的 reserve shape 修复）。项目处于 **medium 消融阶段**：统计对齐与 SDPM paired 对照已完成；reserve-only 与 full NGSG 在 Task2 首样本崩溃，待修复后重跑。
+当前 `dev` HEAD 为 `0aa21a3`。medium 消融 **#1–#4、#6 已完成**（`cf2ae88`/`0aa21a3` 修复 potentials shape bug 后重跑）；**#5 random reserve 待跑**。
 
 | 模块 | 当前状态 | 判断 |
 | --- | --- | --- |
 | paper-source catastrophic baseline | 已完成完整服务器复现 | 遗忘趋势和论文基本对齐，可作为主 baseline。 |
 | winner-frequency / winner_label_counts | 已接入并完成 no-op 对照 | medium 下不扰动 baseline；`winner_label_counts` 200×10 已验证。 |
 | `occupancy_stats.py` + `neuron_partition.py` | 已实现并验证 | 统一计算 `f_i/q_i/I_i`；partition stable 61 / shared 59 / reserve 80。 |
-| SDPM gate（统计对齐后） | medium paired 已完成 | 与 partition 共用 occupancy；`q_i_mean≈0.504`，`unified_occupancy=True`。 |
-| `novelty_gate.py` | 已实现（`8a9e78a`） | 用 natural winner 的 `combined_score` 作为 novelty。 |
-| `reserve_activation.py` | 已实现并接入 Task2（`8a9e78a`）；**4D potentials shape bug 已本地修复** | Task2 首样本崩溃（48000 vs 200）；待 push 后重跑 #4/#6。 |
-| full NGSG（600 epoch） | 尚未开始 | 先完成 medium 五组消融再进 full。 |
+| SDPM gate（统计对齐后） | medium paired 已完成 | 与 partition 共用 occupancy；`q_i_mean≈0.504`，`unified_occupancy=True`；**目前最优 trade-off**。 |
+| `novelty_gate.py` | 已实现并跑通 | Task2 约 **38%** 样本触发 recruit（threshold=0.15）。 |
+| `reserve_activation.py` | 已实现、shape bug 已修、medium 已跑通 | **Task2 严重掉点**（33–36% vs baseline 58.7%）；见 §0.2.1 机制诊断。 |
+| full NGSG（600 epoch） | 尚未开始 | medium reserve 机制需调参/改设计后再进 full。 |
 
 ### 代码 commit 时间线（近期）
 
@@ -47,6 +47,8 @@
 | --- | --- |
 | `4f03da0` | SDPM 与 partition 共用 `occupancy_stats.py`（`f_i/q_i/I_i` 对齐） |
 | `8a9e78a` | novelty gate + reserve activation + `configs/ngsg/` medium 消融 YAML |
+| `cf2ae88` | 修复 C2 cache 下 4D S3 potentials 解析 |
+| `0aa21a3` | 修复 `_select_neuron` 语法错误 |
 
 ### 历史参考：对齐前 SDPM medium（`dev` 旧版，2026-07-02）
 
@@ -69,7 +71,7 @@
 
 本机服务器产物副本：`experiments/server_paper_medium_partition_seed0/`。本机诊断产物：`experiments/diagnostics/paper_medium_partition_seed0/`，包含 `partition_validation.json` 和三张图：`f_i` 直方图、`q_i` vs `f_i` 散点图、dominant neuron per class 分布图。以上目录属于运行产物，不进入 git。
 
-## 0.2 medium 消融矩阵（seed 0，`8a9e78a` 同 lineage）
+## 0.2 medium 消融矩阵（seed 0，`0aa21a3` 同 lineage）
 
 所有下列 medium 实验使用相同数据规模（每类 100 train/test）、Task1 S3 50 epoch、Task2 S3 10 epoch、seed 0、相同 feature checkpoint 与 C2 cache。
 
@@ -78,13 +80,11 @@
 | 1 | baseline / no-op | `noop_medium_*` / `paper_medium_partition_seed0` | off | off | ✅ | 77.2% | 69.8% | 58.7% | 7.4 pp | 64.25% |
 | 2 | no-SDPM paired | `paper_medium_no_sdpm_aligned_seed0` | off | off | ✅ | 77.2% | 69.8% | 58.7% | 7.4 pp | 64.25% |
 | 3 | SDPM aligned | `paper_medium_sdpm_aligned_seed0` | on | off | ✅ | 77.2% | **74.2%** | 57.8% | **3.0 pp** | **66.0%** |
-| 4 | reserve-only | `paper_medium_reserve_only_seed0` | off | on | ❌ Task2 崩溃 | - | - | - | - | - |
+| 4 | reserve-only | `paper_medium_reserve_only_seed0` | off | on | ✅ | 77.2% | 72.7% | **33.6%** | 4.5 pp | 53.15% |
 | 5 | random reserve | `paper_medium_random_reserve_seed0` | off | random | ⬜ 待跑 | - | - | - | - | - |
-| 6 | full NGSG | `paper_medium_ngsg_seed0` | on | on | ❌ Task2 崩溃 | - | - | - | - | - |
+| 6 | full NGSG | `paper_medium_ngsg_seed0` | on | on | ✅ | 77.2% | 71.3% | **36.3%** | 5.9 pp | 53.80% |
 
-**崩溃原因（#4/#6）：** C2 cache 路径下 `ctx["potentials"]` 为 4D `[1, 200, H, W]`，`aggregate_s3_neuron_potentials` 误 flatten 为 48000 维，与 partition mask（200）不匹配。已在本地 `reserve_activation.py` 修复（按 `s3_neurons=200` 解析 3D/4D shape）。
-
-服务器路径：`/root/autodl-tmp/NGSG-spyketorch-4a958ae`，tmux 会话 `pw`。GPU 已空闲；修复 push 后重跑 #4 → #6。
+服务器路径：`/root/autodl-tmp/NGSG-spyketorch-4a958ae`。`#4/#6` 于 `0aa21a3` 重跑完成（`dev@cf2ae88+`）。
 
 ### 对齐后 SDPM vs no-SDPM（paired，`4f03da0`+）
 
@@ -96,25 +96,65 @@
 | Forgetting | 7.4 pp | 3.0 pp | **-4.4 pp** |
 | Avg Acc | 64.25% | 66.0% | **+1.75 pp** |
 
+### 0.2.1 reserve / NGSG Task2 掉点诊断（2026-07-03）
+
+**现象：** reserve-only 与 full NGSG 的 Task1 after Task2 略优于 no-SDPM（72.7 / 71.3 vs 69.8%），但 **Task2 从 58.7% 跌至 33–36%**，Avg Acc 反而最低。
+
+**Task2 训练统计（10 epoch × 1000 samples）：**
+
+| 指标 | reserve-only | full NGSG |
+| --- | ---: | ---: |
+| `novel_fraction` | 38.4% | 38.3% |
+| `recruited_updates` | 3842 | 3825 |
+| `recruitment_rate` | 0.384 | 0.383 |
+| `skipped_low_novelty` | 6158 | 6175 |
+| `mean_score`（natural winner occupancy） | 0.136 | 0.136 |
+| Task2 末 epoch train acc proxy | ~41% | ~41% |
+
+**最可能根因：训练 STDP 目标与推理 winner 不一致（train–test mismatch）**
+
+当前 Task2 循环（`baseline_trainer.py`）为：
+
+```text
+forward → natural WTA winner → decision（用于 acc 统计）
+       → maybe_reroute：改 ctx["winners"] 为 reserve 神经元
+       → reward/punish：对 rerouted winner 做 STDP
+```
+
+推理 / 测试时 **不做 reroute**，预测仍由 natural WTA + `decision_map` 决定。约 **38%** 的 STDP 更新被写入 reserve 神经元，但这些神经元在测试竞争里往往 **仍输给 Task1 已占用的 stable/shared 神经元**，导致 EMNIST 学不上去。
+
+**次要因素：**
+
+1. **`is_novel` 语义：** 代码里 `occupancy >= 0.15` 才 recruit，实际是「旧任务高占用 winner 触发避让」，不是「低占用才算 novel」；命名易误解，但逻辑本身是保护旧神经元。
+2. **recruit 策略：** `_select_neuron` 在 class-local reserve 里取 **potential 最大**者，不等于测试时会赢的 neuron；reserve 在 Task1 几乎未训练，potential 排序噪声大。
+3. **SDPM + reserve 叠加：** full NGSG 的 Task2 比 reserve-only 还低 2.7 pp，SDPM 进一步压低 shared 神经元可塑性，可能加剧「能赢的 neuron 学不动」。
+
+**建议下一步（按优先级）：**
+
+1. **诊断实验：** Task2 结束后统计 reserve 神经元 test-time win rate vs stable/shared；确认 train–test mismatch。
+2. **机制修正（择一或组合）：** 仅对「natural winner 为 stable 且 decision≠target」reroute；或 recruit 后同步更新 `decision_map`/boost reserve 在 WTA 中的竞争；或降低 `novelty_threshold` 减少 reroute 比例做 sensitivity。
+3. **对照：** 跑 `#5 random reserve`；试 threshold ∈ {0.25, 0.35, 0.50}。
+4. **论文叙事：** 当前 SDPM-only 已足够支撑「importance-aware plasticity allocation」；reserve 需 fix 后再 claim「novelty-conditioned capacity recruitment」。
+
 **当前可写结论：**
 
 1. **baseline 复现成立**（full 48.42% Task1 after Task2，见 §0）。
 2. **统计模块 no-op**（logging / partition 不改变 medium 指标）。
-3. **对齐后 SDPM 在 medium 上同时改善旧任务保持与平均准确率**；Task2 仅小幅下降 0.9 pp，优于对齐前 SDPM 的 trade-off。
-4. **partition + reserve 代码已接入**，但 medium 实验 #4/#6 因 potentials shape bug 未完成；修复后需重跑。
+3. **对齐后 SDPM 在 medium 上是目前唯一同时改善旧任务保持与 Avg Acc 的配置**。
+4. **reserve 代码跑通但 medium 上 Task2 失效**，根因高度指向 STDP reroute 与推理 WTA 脱节；**不能**写「完整 NGSG 优于 SDPM-only」。
 
 **当前还不能写成论文结论的内容：**
 
-- reserve-only / full NGSG 的 medium 数字尚未产出（Task2 首样本崩溃）。
+- reserve / full NGSG 作为有效创新点的 efficacy  claim。
 - medium 数字仍不是 final 600/100 epoch 论文主表。
 - random reserve 对照尚未跑完。
 
 **下一步：**
 
-1. commit + push reserve shape 修复，服务器 `git pull` 后重跑 `paper_medium_reserve_only_seed0` → `paper_medium_ngsg_seed0`。
-2. 补跑 `paper_medium_random_reserve_seed0`。
-3. medium 稳定后启动 full 规模：baseline（已有）→ full SDPM aligned → full NGSG。
-4. 汇总 #4/#6 结果到 `CATASTROPHIC_FORGETTING_REPRODUCTION.md`。
+1. 做 reserve test-time win rate 诊断；试 threshold / reroute 条件修正。
+2. 补跑 `paper_medium_random_reserve_seed0` 与 threshold sweep。
+3. medium reserve 机制稳定后，再考虑 full 规模 SDPM vs NGSG。
+4. 汇总 #4/#6 到 `CATASTROPHIC_FORGETTING_REPRODUCTION.md`。
 
 ## 0.3 Logging / partition no-op 对照（2026-07-03）
 

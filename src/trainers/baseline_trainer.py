@@ -136,6 +136,26 @@ class BaselineTrainer:
             task2_after_task2=task2_after_task2,
         )
 
+        test_winner_roles: Optional[Dict[str, Any]] = None
+        if neuron_partition is not None and neuron_partition.enabled:
+            test_winner_roles = {
+                "task1_test_after_task2": self.evaluate_winner_role_distribution(
+                    model,
+                    test_task1_loader,
+                    device,
+                    neuron_partition,
+                    stage_label="task1_test_after_task2",
+                ),
+                "task2_test_after_task2": self.evaluate_winner_role_distribution(
+                    model,
+                    test_task2_loader,
+                    device,
+                    neuron_partition,
+                    stage_label="task2_test_after_task2",
+                ),
+            }
+            self._maybe_save_task2_model(model, config)
+
         extra: Dict[str, Any] = {
             "device": str(device),
             "task_summary": bundle_summary(task_bundles),
@@ -150,6 +170,8 @@ class BaselineTrainer:
             extra["neuron_partition"] = neuron_partition.summarize()
         if reserve_activation is not None and reserve_activation.enabled:
             extra["reserve_activation"] = reserve_activation.summarize()
+        if test_winner_roles is not None:
+            extra["test_winner_roles"] = test_winner_roles
 
         return TrainerResult(
             metrics=metrics,
@@ -893,6 +915,7 @@ class BaselineTrainer:
                             natural_winner_idx=winner_idx,
                             target_class=target,
                             stage_name=stage_name,
+                            decision=decision if decision != -1 else None,
                         )
                     if decision != -1:
                         if decision == target:
@@ -1265,6 +1288,91 @@ class BaselineTrainer:
             correct += int(prediction == int(target.item()))
             total += 1
         return float(correct / max(total, 1))
+
+    @torch.no_grad()
+    def evaluate_winner_role_distribution(
+        self,
+        model: nn.Module,
+        dataloader: Any,
+        device: torch.device,
+        partition: NeuronPartition,
+        *,
+        stage_label: str,
+    ) -> Dict[str, Any]:
+        role_names = ("reserve", "shared", "stable", "dead")
+        role_wins = {name: 0 for name in role_names}
+        role_correct = {name: 0 for name in role_names}
+        per_class_role_wins: Dict[int, Dict[str, int]] = {}
+        total = 0
+        correct = 0
+        silent = 0
+        stable_winner_wrong = 0
+        reserve_winner_total = 0
+
+        for image, target in self.iter_samples(dataloader, device):
+            target_int = int(target.item())
+            prediction = int(model.predict_single(image))
+            winner_idx = self._first_winner_index(model)
+            total += 1
+            if prediction == -1:
+                silent += 1
+            elif prediction == target_int:
+                correct += 1
+
+            if winner_idx is None:
+                continue
+
+            role = partition.role_name(int(winner_idx))
+            role_wins[role] = role_wins.get(role, 0) + 1
+            if prediction == target_int:
+                role_correct[role] = role_correct.get(role, 0) + 1
+            if role == "stable" and prediction != target_int and prediction != -1:
+                stable_winner_wrong += 1
+            if role == "reserve":
+                reserve_winner_total += 1
+
+            class_bucket = per_class_role_wins.setdefault(target_int, {name: 0 for name in role_names})
+            class_bucket[role] = class_bucket.get(role, 0) + 1
+
+        denom = max(total, 1)
+        win_denom = max(sum(role_wins.values()), 1)
+        return {
+            "stage": stage_label,
+            "total_samples": total,
+            "accuracy": float(correct / denom),
+            "silent_predictions": silent,
+            "role_wins": role_wins,
+            "role_win_fractions": {role: float(count / win_denom) for role, count in role_wins.items()},
+            "role_accuracy": {
+                role: float(role_correct.get(role, 0) / max(role_wins.get(role, 0), 1)) for role in role_names
+            },
+            "stable_winner_wrong_prediction": stable_winner_wrong,
+            "stable_winner_wrong_fraction": float(stable_winner_wrong / denom),
+            "reserve_test_win_rate": float(role_wins.get("reserve", 0) / win_denom),
+            "reserve_winner_accuracy": float(role_correct.get("reserve", 0) / max(reserve_winner_total, 1)),
+            "per_class_role_wins": {str(label): counts for label, counts in sorted(per_class_role_wins.items())},
+            "interpretation": (
+                "Test-time natural WTA winner role distribution. Low reserve win rate after "
+                "reserve-only training supports train-test STDP reroute mismatch."
+            ),
+        }
+
+    def _maybe_save_task2_model(self, model: nn.Module, config: Mapping[str, Any]) -> Optional[str]:
+        output_cfg = config.get("output", {})
+        if not bool(output_cfg.get("save_task2_model", False)):
+            return None
+        run_name = str(config.get("run_name", "unnamed_run"))
+        root_dir = Path(str(output_cfg.get("root_dir", "experiments")))
+        save_dir = root_dir / run_name / "artifacts"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        save_path = save_dir / "model_after_task2.pt"
+        payload = {
+            "model_state_dict": model.state_dict(),
+            "decision_map": getattr(model, "decision_map", None),
+            "run_name": run_name,
+        }
+        torch.save(payload, save_path)
+        return str(save_path)
 
     def _stage_epochs(self, config: Mapping[str, Any], stage_name: str, key: str, default: int) -> int:
         train_cfg = config.get("train", {})

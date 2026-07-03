@@ -303,3 +303,35 @@ class NeuronPartition:
                 }
             )
         return payload
+
+    @classmethod
+    def from_role_payload(cls, payload: Mapping[str, Any]) -> "NeuronPartition":
+        """Rebuild a partition from saved role names (e.g. result.json task1_training)."""
+        roles_list = payload.get("roles")
+        if not roles_list:
+            raise ValueError("NeuronPartition.from_role_payload requires a non-empty 'roles' list.")
+
+        name_to_role = {name: int(role) for role, name in ROLE_NAMES.items()}
+        roles = torch.tensor([name_to_role[str(name)] for name in roles_list], dtype=torch.int64)
+        num_neurons = int(roles.numel())
+        config_payload = payload.get("config", {"enabled": True})
+        partition_config = (
+            config_payload
+            if isinstance(config_payload, NeuronPartitionConfig)
+            else NeuronPartitionConfig.from_mapping(config_payload)
+        )
+        occupancy = Task1OccupancyStats(
+            f_i=torch.tensor(payload.get("f_i", [0.0] * num_neurons), dtype=torch.float32),
+            q_i=torch.tensor(payload.get("q_i", [0.0] * num_neurons), dtype=torch.float32),
+            I_i=torch.tensor(payload.get("I_i", [0.0] * num_neurons), dtype=torch.float32),
+            dominant_labels=torch.tensor(
+                payload.get("dominant_labels", [0] * num_neurons),
+                dtype=torch.int64,
+            ),
+        )
+        return cls(
+            roles=roles,
+            occupancy=occupancy,
+            config=partition_config,
+            thresholds=dict(payload.get("thresholds", {})),
+        )

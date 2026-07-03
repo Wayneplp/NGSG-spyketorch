@@ -2,7 +2,108 @@
 
 最后更新：2026-07-02
 
-本次补充：服务器完整 catastrophic baseline 已在开启 winner-frequency logging 后跑完；结果已整理到 `published_results/baseline/paper_ch4_catastrophic_optimized_winnerlog_seed0.json`，并作为当前 NGSG 统计基线参考。
+本次补充：服务器 2 号完成 SDPM medium 验证和同代码 no-SDPM paired baseline；SDPM gate 已确认能拟合并在 Task2 生效，但当前 SDPM-only 牺牲 Task2 学习，平均精度不优于 no-SDPM。服务器完整 catastrophic baseline 仍以 `published_results/baseline/paper_ch4_catastrophic_optimized_winnerlog_seed0.json` 作为当前 NGSG 统计基线参考。
+
+
+## 2026-07-02 服务器 2 号 SDPM medium 验证
+
+目的：这组实验不是正式论文规模结果，而是验证 SDPM gate 代码路径是否真的生效，并用同服务器、同代码、同 medium 数据规模的 no-SDPM 结果做 paired baseline。
+
+服务器与代码状态：
+
+- 服务器：`ssh -p 40399 root@connect.nmb1.seetacloud.com`
+- 服务器仓库：`/root/autodl-tmp/NGSG-spyketorch-4a958ae`
+- 服务器初始分支：`codex/server-preprocess-cache`
+- 服务器初始提交：`e86a263 Add latest server status note`
+- GPU：NVIDIA GeForce RTX 4090，训练前后均可正常释放。
+- 已上传本地 SDPM 小文件：`src/continual/sdpm_gate.py`、`src/continual/__init__.py`、`src/trainers/baseline_trainer.py`、两个 SDPM YAML 和 `SDPM_GATE_DESIGN.md`。
+- 上传前远端备份：`/root/autodl-tmp/ngsg_backup_sdpm_20260702_154556`
+- 服务器磁盘较紧：`/root/autodl-tmp` 50G 中约 48G 已用，实验结束后剩余约 2.1G。
+
+服务器缓存状态：
+
+- `data/preprocessed/paper_source`：约 4.6G，预检时共 66,000 个 `.pt`。
+- `data/features/c2`：约 44G，预检时共 48,000 个 `.pt`。
+- `checkpoints/features`：存在 task1/task2 S1/S2 checkpoint。
+
+误启动记录：
+
+- 曾误启动完整 `configs/baseline/catastrophic_mnist_emnist_sdpm.yaml`，run name 为 `paper_ch4_sdpm_only_seed0`。
+- 该任务在 Task1 S3 训练早期停止，停止前约到 epoch 9/600，未进入 Task2 SDPM 验证阶段。
+- 已通过 `tmux send-keys C-c` 停止，GPU 恢复到 0 MiB。该目录和日志未删除，避免误删实验产物。
+
+### SDPM-only medium 验证
+
+运行信息：
+
+- run name：`paper_medium_sdpm_only_seed0`
+- 配置：`configs/baseline/catastrophic_mnist_emnist_paper_medium_sdpm.yaml`
+- 结果文件：`/root/autodl-tmp/NGSG-spyketorch-4a958ae/experiments/paper_medium_sdpm_only_seed0/result.json`
+- 日志文件：`/root/autodl-tmp/NGSG-spyketorch-4a958ae/logs/paper_medium_sdpm_only_seed0.log`
+- 规模：MNIST 每类 100 train / 100 test，EMNIST 每类 100 train / 100 test；Task1 S3 50 epoch，Task2 S3 10 epoch。
+
+关键日志：
+
+```text
+[sdpm gate] fitted from Task 1 stats: protected_fraction=0.3000 gate_mean=0.9329 random_protection=False
+[paper s3] SDPM gate active for stage=task2
+```
+
+SDPM gate 统计：
+
+| 字段 | 数值 |
+| --- | ---: |
+| protected_fraction | 0.3000 |
+| gate_mean | 0.9329 |
+| gate_min | 0.0500 |
+| gate_max | 1.0000 |
+| importance_mean | 0.0706 |
+| update_calls | 10000 |
+
+测试指标：
+
+| 指标 | 数值 |
+| --- | ---: |
+| Task1 after Task1 / MNIST 初训后 | 79.6% |
+| Task1 after Task2 / EMNIST 后 MNIST 保持 | 68.1% |
+| Task2 after Task2 / EMNIST 后 EMNIST | 54.8% |
+| Forgetting | 11.5 个百分点 |
+| Avg Acc | 61.45% |
+
+### 同代码 no-SDPM paired baseline
+
+运行信息：
+
+- run name：`paper_medium_no_sdpm_samecode_seed0`
+- 配置：远端从 SDPM medium 配置复制生成 `configs/baseline/catastrophic_mnist_emnist_paper_medium_no_sdpm_samecode.yaml`，仅将 `continual.sdpm_gate.enabled` 改为 `false`。
+- 结果文件：`/root/autodl-tmp/NGSG-spyketorch-4a958ae/experiments/paper_medium_no_sdpm_samecode_seed0/result.json`
+- 日志文件：`/root/autodl-tmp/NGSG-spyketorch-4a958ae/logs/paper_medium_no_sdpm_samecode_seed0.log`
+
+测试指标：
+
+| 指标 | 数值 |
+| --- | ---: |
+| Task1 after Task1 / MNIST 初训后 | 79.6% |
+| Task1 after Task2 / EMNIST 后 MNIST 保持 | 65.9% |
+| Task2 after Task2 / EMNIST 后 EMNIST | 60.3% |
+| Forgetting | 13.7 个百分点 |
+| Avg Acc | 63.10% |
+
+### Paired 结论
+
+| 配置 | Task1 after Task1 | Task1 after Task2 | Task2 after Task2 | Forgetting | Avg Acc |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| no-SDPM same-code | 79.6% | 65.9% | 60.3% | 13.7 pp | 63.10% |
+| SDPM-only | 79.6% | 68.1% | 54.8% | 11.5 pp | 61.45% |
+| SDPM - no-SDPM | 0.0 pp | +2.2 pp | -5.5 pp | -2.2 pp | -1.65 pp |
+
+判断：
+
+- 机制验证通过：SDPM gate 确实从 Task1 winner statistics 拟合，并在 Task2 的 reward / anti-reward STDP 更新中生效。
+- SDPM-only 有旧任务保护效果：Task1 after Task2 提升 2.2 个百分点，forgetting 降低 2.2 个百分点。
+- 当前 SDPM-only 不够强：Task2 after Task2 下降 5.5 个百分点，导致平均精度低于 no-SDPM。
+- 这符合 SDPM 的模块定位：它是旧知识 soft protection 分支，不负责给新任务主动分配 reserve capacity；后续需要 novelty gate / reserve activation 补足新任务学习能力。
+- 若继续调 SDPM-only，优先尝试更弱保护，例如 `protect_top_fraction=0.1` 或提高 `g_min=0.2/0.3`，观察 Task2 是否恢复，同时旧任务保持是否仍优于 no-SDPM。
 
 
 ## 2026-07-02 winner-frequency logging 服务器 baseline 结果
@@ -565,3 +666,4 @@ C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config c
 ```
 
 完整配置非常耗时，建议先跑中等规模配置再跑完整 600/100 epoch。
+

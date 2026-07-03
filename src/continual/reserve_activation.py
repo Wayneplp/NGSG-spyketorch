@@ -89,6 +89,9 @@ def build_winner_entry(pot: Tensor, neuron_idx: int, template_winner: Any, *, nu
     return (int(neuron_idx),)
 
 
+RECRUIT_CONDITIONS = ("occupancy", "stable_mismatch", "all")
+
+
 @dataclass
 class ReserveActivationConfig:
     enabled: bool = False
@@ -99,9 +102,23 @@ class ReserveActivationConfig:
     random_recruitment: bool = False
     random_seed: Optional[int] = None
     use_normalized_occupancy: bool = True
+    recruit_condition: str = "occupancy"
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "ReserveActivationConfig":
+        if "recruit_condition" in config:
+            recruit_condition = str(config.get("recruit_condition", "occupancy")).lower()
+        elif bool(config.get("reroute_only_stable_winner", False)) and bool(
+            config.get("reroute_only_on_mismatch", False)
+        ):
+            recruit_condition = "stable_mismatch"
+        else:
+            recruit_condition = "occupancy"
+        if recruit_condition not in RECRUIT_CONDITIONS:
+            raise ValueError(
+                f"Unknown reserve recruit_condition '{recruit_condition}'. "
+                f"Expected one of {RECRUIT_CONDITIONS}."
+            )
         return cls(
             enabled=bool(config.get("enabled", False)),
             apply_stages=_parse_apply_stages(config),
@@ -111,6 +128,7 @@ class ReserveActivationConfig:
             random_recruitment=bool(config.get("random_recruitment", False)),
             random_seed=config.get("random_seed"),
             use_normalized_occupancy=bool(config.get("use_normalized_occupancy", True)),
+            recruit_condition=recruit_condition,
         )
 
 
@@ -220,6 +238,46 @@ class ReserveActivation:
         best_local = int(candidate_potentials.argmax().item())
         return int(candidates[best_local].item())
 
+    def _stable_mismatch(self, natural_winner_idx: Optional[int], decision: Optional[int], target_class: int) -> bool:
+        if natural_winner_idx is None:
+            return False
+        if decision is None or int(decision) == int(target_class):
+            return False
+        return self.partition.role_name(int(natural_winner_idx)) == ROLE_NAMES[NeuronRole.STABLE]
+
+    def _should_recruit(
+        self,
+        *,
+        natural_winner_idx: Optional[int],
+        decision: Optional[int],
+        target_class: int,
+    ) -> Tuple[bool, str]:
+        condition = self.config.recruit_condition
+        occupancy_novel = self.novelty_gate.is_novel(natural_winner_idx)
+        stable_mismatch = self._stable_mismatch(natural_winner_idx, decision, target_class)
+
+        if condition == "occupancy":
+            if occupancy_novel:
+                return True, "occupancy"
+            return False, "skipped_low_novelty"
+        if condition == "stable_mismatch":
+            if stable_mismatch:
+                return True, "stable_mismatch"
+            if natural_winner_idx is None:
+                return False, "skipped_no_winner"
+            if decision is not None and int(decision) == int(target_class):
+                return False, "skipped_decision_match"
+            if self.partition.role_name(int(natural_winner_idx)) != ROLE_NAMES[NeuronRole.STABLE]:
+                return False, "skipped_non_stable_winner"
+            return False, "skipped_stable_mismatch"
+        if condition == "all":
+            if occupancy_novel and stable_mismatch:
+                return True, "occupancy_and_stable_mismatch"
+            if not occupancy_novel:
+                return False, "skipped_low_novelty"
+            return False, "skipped_stable_mismatch"
+        return False, "skipped_unknown_condition"
+
     def maybe_reroute(
         self,
         model: nn.Module,
@@ -227,13 +285,19 @@ class ReserveActivation:
         natural_winner_idx: Optional[int],
         target_class: int,
         stage_name: str,
+        decision: Optional[int] = None,
     ) -> bool:
         if not self.should_apply(stage_name):
             return False
 
         self.novelty_gate.observe(natural_winner_idx)
-        if not self.novelty_gate.is_novel(natural_winner_idx):
-            self.stats["skipped_low_novelty"] = float(self.stats.get("skipped_low_novelty", 0.0) + 1.0)
+        should_recruit, skip_reason = self._should_recruit(
+            natural_winner_idx=natural_winner_idx,
+            decision=decision,
+            target_class=target_class,
+        )
+        if not should_recruit:
+            self.stats[skip_reason] = float(self.stats.get(skip_reason, 0.0) + 1.0)
             return False
 
         potentials = aggregate_s3_neuron_potentials(model)
@@ -264,6 +328,8 @@ class ReserveActivation:
         ]
 
         self.stats["recruited_updates"] = float(self.stats.get("recruited_updates", 0.0) + 1.0)
+        recruit_key = f"recruited_by_{skip_reason}"
+        self.stats[recruit_key] = float(self.stats.get(recruit_key, 0.0) + 1.0)
         return True
 
     def summarize(self) -> Dict[str, Any]:
@@ -272,13 +338,29 @@ class ReserveActivation:
 
         recruited = float(self.stats.get("recruited_updates", 0.0))
         samples = float(self.novelty_gate.stats.get("samples", 0.0))
+        skip_keys = (
+            "skipped_low_novelty",
+            "skipped_no_winner",
+            "skipped_decision_match",
+            "skipped_non_stable_winner",
+            "skipped_stable_mismatch",
+            "skipped_unknown_condition",
+        )
+        skip_stats = {key: float(self.stats.get(key, 0.0)) for key in skip_keys if self.stats.get(key, 0.0)}
+        recruit_by = {
+            key.removeprefix("recruited_by_"): float(value)
+            for key, value in self.stats.items()
+            if key.startswith("recruited_by_")
+        }
         return {
             "enabled": True,
             "recruited_updates": recruited,
             "recruitment_rate": float(recruited / samples) if samples > 0 else 0.0,
             "failed_recruitment": float(self.stats.get("failed_recruitment", 0.0)),
-            "skipped_low_novelty": float(self.stats.get("skipped_low_novelty", 0.0)),
+            "skip_stats": skip_stats,
+            "recruited_by": recruit_by,
             "random_recruitment": self.config.random_recruitment,
+            "recruit_condition": self.config.recruit_condition,
             "recruit_roles": [ROLE_NAMES[role] for role in self.config.recruit_roles],
             "config": asdict(self.config),
             "novelty_gate": self.novelty_gate.summarize(),
