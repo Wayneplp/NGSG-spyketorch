@@ -1,4 +1,4 @@
-# Medium-scale SDPM-only diagnostic config.
+# Medium-scale full NGSG: aligned SDPM + novelty-conditioned reserve recruitment.
 method: catastrophic
 seed: 0
 run_name: null
@@ -82,7 +82,7 @@ continual:
     importance:
       use_weight_strength: true
   reserve_activation:
-    enabled: false
+    enabled: true
     apply_stages: [task2]
     novelty_threshold: 0.15
     use_class_local: true

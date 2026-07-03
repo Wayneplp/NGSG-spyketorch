@@ -13,7 +13,7 @@ from torch import nn
 from SpykeTorch import snn
 
 from src.analysis.metrics import summarize_continual_metrics
-from src.continual import NeuronPartition, SDPMGate
+from src.continual import NeuronPartition, ReserveActivation, SDPMGate
 from src.plasticity import SpykeTorchRSTDPConfig, SpykeTorchRewardSTDP
 from src.utils.data import (
     ConcatenatedSubset,
@@ -89,6 +89,7 @@ class BaselineTrainer:
             sdpm_gate,
             neuron_partition=neuron_partition,
         )
+        reserve_activation = self.fit_reserve_activation_after_task1(model, config, neuron_partition)
         if neuron_partition is not None and neuron_partition.enabled:
             task1_training_stats["neuron_partition"] = neuron_partition.to_dict(include_arrays=True)
 
@@ -124,6 +125,7 @@ class BaselineTrainer:
             device=device,
             stage_name="task2",
             sdpm_gate=sdpm_gate,
+            reserve_activation=reserve_activation,
         )
 
         task1_after_task2 = self.evaluate(model, test_task1_loader, device)
@@ -146,6 +148,8 @@ class BaselineTrainer:
             extra["sdpm_gate"] = sdpm_gate.summarize()
         if neuron_partition is not None and neuron_partition.enabled:
             extra["neuron_partition"] = neuron_partition.summarize()
+        if reserve_activation is not None and reserve_activation.enabled:
+            extra["reserve_activation"] = reserve_activation.summarize()
 
         return TrainerResult(
             metrics=metrics,
@@ -366,6 +370,39 @@ class BaselineTrainer:
         )
         return fitted
 
+    def fit_reserve_activation_after_task1(
+        self,
+        model: nn.Module,
+        config: Mapping[str, Any],
+        neuron_partition: Optional[NeuronPartition],
+    ) -> Optional[ReserveActivation]:
+        reserve_cfg = config.get("continual", {}).get("reserve_activation", {})
+        if not bool(reserve_cfg.get("enabled", False)):
+            return None
+        if neuron_partition is None or not neuron_partition.enabled:
+            raise ValueError(
+                "reserve_activation is enabled but neuron_partition is missing or disabled. "
+                "Enable continual.neuron_partition when using reserve activation."
+            )
+
+        neurons_per_class = int(config.get("model", {}).get("neurons_per_class", 20))
+        fitted = ReserveActivation.from_partition(
+            neuron_partition,
+            reserve_cfg,
+            neurons_per_class=neurons_per_class,
+            global_seed=int(config.get("seed", 0)),
+        )
+        summary = fitted.summarize()
+        novelty = summary.get("novelty_gate", {})
+        print(
+            "[reserve activation] fitted from Task 1 partition: "
+            f"recruit_roles={summary.get('recruit_roles', [])} "
+            f"novelty_threshold={novelty.get('novelty_threshold', reserve_cfg.get('novelty_threshold', 0.0))} "
+            f"random_recruitment={summary.get('random_recruitment', False)}",
+            flush=True,
+        )
+        return fitted
+
     def train_single_task(
         self,
         model: nn.Module,
@@ -375,6 +412,7 @@ class BaselineTrainer:
         device: torch.device,
         stage_name: str,
         sdpm_gate: Optional[SDPMGate] = None,
+        reserve_activation: Optional[ReserveActivation] = None,
     ) -> Dict[str, Any]:
         train_cfg = config.get("train", {})
         learning_rule = str(train_cfg.get("learning_rule", "spyketorch_stdp_rstdp")).lower()
@@ -392,6 +430,7 @@ class BaselineTrainer:
                 device,
                 stage_name,
                 sdpm_gate=sdpm_gate,
+                reserve_activation=reserve_activation,
             )
 
         s1_epochs = self._stage_epochs(config, stage_name, "s1_stdp_epochs", 0)
@@ -659,6 +698,7 @@ class BaselineTrainer:
         device: torch.device,
         stage_name: str,
         sdpm_gate: Optional[SDPMGate] = None,
+        reserve_activation: Optional[ReserveActivation] = None,
     ) -> Dict[str, Any]:
         train_cfg = config.get("train", {})
         if bool(train_cfg.get("reset_learning_rates_each_stage", True)) and hasattr(model, "reset_learning_rates"):
@@ -725,6 +765,7 @@ class BaselineTrainer:
             stage_name=stage_name,
             sdpm_gate=sdpm_gate,
             config=config,
+            reserve_activation=reserve_activation,
         )
         return stats
     def train_paper_unsupervised(
@@ -777,6 +818,7 @@ class BaselineTrainer:
         stage_name: str = "task1",
         sdpm_gate: Optional[SDPMGate] = None,
         config: Optional[Mapping[str, Any]] = None,
+        reserve_activation: Optional[ReserveActivation] = None,
     ) -> Dict[str, Any]:
         adaptive_int = float(train_cfg.get("paper_adaptive_int", 0.5))
         adaptive_min = float(train_cfg.get("paper_adaptive_min", 0.0))
@@ -785,8 +827,10 @@ class BaselineTrainer:
         winner_log_enabled = bool(winner_log_cfg.get("enabled", False))
         sdpm_enabled = bool((config or {}).get("continual", {}).get("sdpm_gate", {}).get("enabled", False))
         partition_enabled = bool((config or {}).get("continual", {}).get("neuron_partition", {}).get("enabled", False))
-        track_winner_counts = winner_log_enabled or sdpm_enabled or partition_enabled
+        reserve_enabled = bool((config or {}).get("continual", {}).get("reserve_activation", {}).get("enabled", False))
+        track_winner_counts = winner_log_enabled or sdpm_enabled or partition_enabled or reserve_enabled
         apply_sdpm = sdpm_gate is not None and sdpm_gate.should_apply(stage_name)
+        apply_reserve = reserve_activation is not None and reserve_activation.should_apply(stage_name)
         winner_log_top_k = int(winner_log_cfg.get("top_k", 10))
         winner_log_include_counts = bool(winner_log_cfg.get("include_counts", True))
         num_s3_neurons = int(getattr(getattr(model, "config", None), "s3_neurons", len(getattr(model, "decision_map", []))))
@@ -804,6 +848,8 @@ class BaselineTrainer:
         feature_source = "cached_c2_s3_input" if using_s3_input_cache else "raw_or_preprocessed_input"
         if apply_sdpm:
             print(f"[paper s3] SDPM gate active for stage={stage_name}", flush=True)
+        if apply_reserve:
+            print(f"[paper s3] reserve activation active for stage={stage_name}", flush=True)
         for epoch_idx in range(epochs):
             model.train()
             correct = 0
@@ -827,8 +873,8 @@ class BaselineTrainer:
                     else:
                         decision = int(model(inputs[sample_idx], 3))
                     target = int(targets[sample_idx].item())
+                    winner_idx = self._first_winner_index(model) if track_winner_counts or apply_reserve else None
                     if track_winner_counts:
-                        winner_idx = self._first_winner_index(model)
                         if winner_idx is not None:
                             winner_log_samples += 1
                             if 0 <= winner_idx < len(winner_counts):
@@ -841,6 +887,13 @@ class BaselineTrainer:
                             winner_class = self._winner_class(model, winner_idx, decision)
                             if 0 <= winner_class < len(winner_class_counts):
                                 winner_class_counts[winner_class] += 1
+                    if apply_reserve and reserve_activation is not None:
+                        reserve_activation.maybe_reroute(
+                            model,
+                            natural_winner_idx=winner_idx,
+                            target_class=target,
+                            stage_name=stage_name,
+                        )
                     if decision != -1:
                         if decision == target:
                             batch_correct += 1
@@ -930,6 +983,8 @@ class BaselineTrainer:
             output_stats["winner_label_counts"] = task_winner_label_counts
         if apply_sdpm and sdpm_gate is not None:
             output_stats["sdpm_gate"] = sdpm_gate.summarize()
+        if apply_reserve and reserve_activation is not None:
+            output_stats["reserve_activation"] = reserve_activation.summarize()
         return output_stats
 
     def _first_winner_index(self, model: nn.Module) -> Optional[int]:
@@ -1252,6 +1307,7 @@ class BaselineTrainer:
         architecture = str((config or {}).get("model", {}).get("architecture", "spyketorch")).lower()
         sdpm_enabled = bool((config or {}).get("continual", {}).get("sdpm_gate", {}).get("enabled", False))
         partition_enabled = bool((config or {}).get("continual", {}).get("neuron_partition", {}).get("enabled", False))
+        reserve_enabled = bool((config or {}).get("continual", {}).get("reserve_activation", {}).get("enabled", False))
         if architecture in {"paper_spyketorch", "paper_source", "mozafari2018"}:
             note = (
                 "Paper-source port: model/preprocessing/forward/STDP/anti-STDP follow "
@@ -1262,6 +1318,8 @@ class BaselineTrainer:
                 note += " SDPM gate scales S3 reward/anti-STDP updates using Task 1 winner-frequency and weight-strength importance."
             if partition_enabled:
                 note += " Neuron partition assigns S3 neurons to stable/shared/reserve pools from Task 1 winner statistics."
+            if reserve_enabled:
+                note += " Reserve activation reroutes high-novelty Task 2 STDP updates toward low-occupancy reserve neurons."
             return note
         return (
             "Official SpykeTorch-based tutorial path: S1/S2 use SpykeTorch snn.STDP, "

@@ -1,4 +1,4 @@
-# Medium-scale SDPM-only diagnostic config.
+# Paired no-SDPM medium control on dev@4f03da0+ (same as medium_sdpm except SDPM off).
 method: catastrophic
 seed: 0
 run_name: null
@@ -62,7 +62,7 @@ model:
 
 continual:
   sdpm_gate:
-    enabled: true
+    enabled: false
     source_stage: task1
     apply_stages: [task2]
     importance:
