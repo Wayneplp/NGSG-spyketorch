@@ -103,6 +103,14 @@ class ReserveActivationConfig:
     random_seed: Optional[int] = None
     use_normalized_occupancy: bool = True
     recruit_condition: str = "occupancy"
+    update_decision_map: bool = False
+    decision_map_update_threshold: int = 3
+    reroute_updates: bool = True
+    homeostatic_boost: bool = False
+    homeostatic_boost_initial: float = 0.0
+    homeostatic_boost_start_epoch: int = 1
+    homeostatic_boost_decay_epochs: int = 0
+    homeostatic_boost_roles: Tuple[NeuronRole, ...] = (NeuronRole.RESERVE,)
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "ReserveActivationConfig":
@@ -129,6 +137,16 @@ class ReserveActivationConfig:
             random_seed=config.get("random_seed"),
             use_normalized_occupancy=bool(config.get("use_normalized_occupancy", True)),
             recruit_condition=recruit_condition,
+            update_decision_map=bool(config.get("update_decision_map", False)),
+            decision_map_update_threshold=max(1, int(config.get("decision_map_update_threshold", 3))),
+            reroute_updates=bool(config.get("reroute_updates", True)),
+            homeostatic_boost=bool(config.get("homeostatic_boost", False)),
+            homeostatic_boost_initial=float(config.get("homeostatic_boost_initial", 0.0)),
+            homeostatic_boost_start_epoch=max(1, int(config.get("homeostatic_boost_start_epoch", 1))),
+            homeostatic_boost_decay_epochs=max(0, int(config.get("homeostatic_boost_decay_epochs", 0))),
+            homeostatic_boost_roles=_parse_recruit_roles(
+                {"recruit_roles": config.get("homeostatic_boost_roles", config.get("recruit_roles", ("reserve",)))}
+            ),
         )
 
 
@@ -142,6 +160,7 @@ class ReserveActivation:
     neurons_per_class: int
     stats: Dict[str, float] = field(default_factory=dict)
     _generator: Optional[torch.Generator] = field(default=None, repr=False)
+    _decision_map_recruit_counts: Dict[Tuple[int, int], int] = field(default_factory=dict, repr=False)
 
     @property
     def enabled(self) -> bool:
@@ -192,6 +211,16 @@ class ReserveActivation:
     def should_apply(self, stage_name: str) -> bool:
         return self.enabled and stage_name in self.config.apply_stages
 
+    def uses_reroute(self) -> bool:
+        return self.enabled and self.config.reroute_updates
+
+    def uses_homeostatic_boost(self) -> bool:
+        return (
+            self.enabled
+            and self.config.homeostatic_boost
+            and float(self.config.homeostatic_boost_initial) > 0.0
+        )
+
     def _class_block(self, class_idx: int, num_neurons: int) -> range:
         start = int(class_idx) * self.neurons_per_class
         end = min(start + self.neurons_per_class, num_neurons)
@@ -218,6 +247,40 @@ class ReserveActivation:
         if not candidates:
             return torch.tensor([], dtype=torch.int64)
         return torch.tensor(candidates, dtype=torch.int64)
+
+    def homeostatic_boost_scale(self, epoch_index: int) -> float:
+        if not self.uses_homeostatic_boost():
+            return 0.0
+        epoch = int(epoch_index) + 1
+        start = int(self.config.homeostatic_boost_start_epoch)
+        if epoch < start:
+            return 0.0
+        initial = float(self.config.homeostatic_boost_initial)
+        decay_epochs = int(self.config.homeostatic_boost_decay_epochs)
+        if decay_epochs <= 0:
+            return initial
+        step = epoch - start
+        if step >= decay_epochs:
+            return 0.0
+        return initial * float(decay_epochs - step) / float(decay_epochs)
+
+    def homeostatic_boost_vector(self, *, num_neurons: int, epoch_index: int) -> Optional[Tensor]:
+        scale = self.homeostatic_boost_scale(epoch_index)
+        if scale <= 0.0 or num_neurons <= 0:
+            return None
+
+        role_mask = torch.zeros(num_neurons, dtype=torch.bool)
+        for role in self.config.homeostatic_boost_roles:
+            role_mask |= self.partition.mask_for_role(role)
+        if int(role_mask.sum().item()) <= 0:
+            return None
+
+        boost = torch.zeros(num_neurons, dtype=torch.float32)
+        boost[role_mask] = float(scale)
+        self.stats["homeostatic_boost_epochs"] = float(self.stats.get("homeostatic_boost_epochs", 0.0) + 1.0)
+        self.stats["homeostatic_boost_last_scale"] = float(scale)
+        self.stats["homeostatic_boost_neurons"] = float(role_mask.sum().item())
+        return boost
 
     def _select_neuron(
         self,
@@ -287,7 +350,7 @@ class ReserveActivation:
         stage_name: str,
         decision: Optional[int] = None,
     ) -> bool:
-        if not self.should_apply(stage_name):
+        if not self.should_apply(stage_name) or not self.config.reroute_updates:
             return False
 
         self.novelty_gate.observe(natural_winner_idx)
@@ -330,7 +393,41 @@ class ReserveActivation:
         self.stats["recruited_updates"] = float(self.stats.get("recruited_updates", 0.0) + 1.0)
         recruit_key = f"recruited_by_{skip_reason}"
         self.stats[recruit_key] = float(self.stats.get(recruit_key, 0.0) + 1.0)
+        self._maybe_update_decision_map(model, recruited, int(target_class))
         return True
+
+    def _maybe_update_decision_map(self, model: nn.Module, neuron_idx: int, target_class: int) -> None:
+        if not self.config.update_decision_map:
+            return
+
+        decision_map = getattr(model, "decision_map", None)
+        if decision_map is None or neuron_idx < 0 or neuron_idx >= len(decision_map):
+            self.stats["decision_map_update_unavailable"] = float(
+                self.stats.get("decision_map_update_unavailable", 0.0) + 1.0
+            )
+            return
+
+        key = (int(neuron_idx), int(target_class))
+        count = int(self._decision_map_recruit_counts.get(key, 0) + 1)
+        self._decision_map_recruit_counts[key] = count
+        self.stats["decision_map_update_observations"] = float(
+            self.stats.get("decision_map_update_observations", 0.0) + 1.0
+        )
+
+        if count < int(self.config.decision_map_update_threshold):
+            return
+
+        current_class = int(decision_map[int(neuron_idx)])
+        if current_class == int(target_class):
+            self.stats["decision_map_already_aligned"] = float(
+                self.stats.get("decision_map_already_aligned", 0.0) + 1.0
+            )
+            return
+
+        decision_map[int(neuron_idx)] = int(target_class)
+        self.stats["decision_map_updates"] = float(self.stats.get("decision_map_updates", 0.0) + 1.0)
+        update_key = f"decision_map_{current_class}_to_{int(target_class)}"
+        self.stats[update_key] = float(self.stats.get(update_key, 0.0) + 1.0)
 
     def summarize(self) -> Dict[str, Any]:
         if not self.config.enabled:
@@ -352,6 +449,11 @@ class ReserveActivation:
             for key, value in self.stats.items()
             if key.startswith("recruited_by_")
         }
+        decision_map_transitions = {
+            key.removeprefix("decision_map_"): float(value)
+            for key, value in self.stats.items()
+            if key.startswith("decision_map_") and "_to_" in key
+        }
         return {
             "enabled": True,
             "recruited_updates": recruited,
@@ -363,6 +465,25 @@ class ReserveActivation:
             "random_recruitment": self.config.random_recruitment,
             "recruit_condition": self.config.recruit_condition,
             "recruit_roles": [ROLE_NAMES[role] for role in self.config.recruit_roles],
+            "decision_map_update": {
+                "enabled": self.config.update_decision_map,
+                "threshold": self.config.decision_map_update_threshold,
+                "observations": float(self.stats.get("decision_map_update_observations", 0.0)),
+                "updates": float(self.stats.get("decision_map_updates", 0.0)),
+                "already_aligned": float(self.stats.get("decision_map_already_aligned", 0.0)),
+                "unavailable": float(self.stats.get("decision_map_update_unavailable", 0.0)),
+                "transitions": decision_map_transitions,
+            },
+            "homeostatic_boost": {
+                "enabled": self.config.homeostatic_boost,
+                "initial": self.config.homeostatic_boost_initial,
+                "start_epoch": self.config.homeostatic_boost_start_epoch,
+                "decay_epochs": self.config.homeostatic_boost_decay_epochs,
+                "roles": [ROLE_NAMES[role] for role in self.config.homeostatic_boost_roles],
+                "active_epochs": float(self.stats.get("homeostatic_boost_epochs", 0.0)),
+                "last_scale": float(self.stats.get("homeostatic_boost_last_scale", 0.0)),
+                "boosted_neurons": float(self.stats.get("homeostatic_boost_neurons", 0.0)),
+            },
             "config": asdict(self.config),
             "novelty_gate": self.novelty_gate.summarize(),
         }

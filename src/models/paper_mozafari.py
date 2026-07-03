@@ -73,6 +73,7 @@ class PaperMozafariMNIST2018(nn.Module):
             self.decision_map.extend([class_idx] * self.config.neurons_per_class)
 
         self.ctx: Dict[str, Any] = {"input_spikes": None, "potentials": None, "output_spikes": None, "winners": None}
+        self.s3_potential_boost: Optional[Tensor] = None
         self.spk_cnt1 = 0
         self.spk_cnt2 = 0
 
@@ -166,6 +167,7 @@ class PaperMozafariMNIST2018(nn.Module):
 
             spk_in = sf.pad(sf.pooling(spk, 3, 3), (2, 2, 2, 2))
             pot = self.conv3(spk_in)
+            pot = self._apply_s3_potential_boost(pot)
             spk = sf.fire(pot)
             winners = sf.get_k_winners(pot, 1, self.r3, spk)
             self._store_context(spk_in, pot, spk, winners)
@@ -180,6 +182,7 @@ class PaperMozafariMNIST2018(nn.Module):
         if max_layer == 2:
             return spk, pot
         pot = self.conv3(sf.pad(sf.pooling(spk, 3, 3), (2, 2, 2, 2)))
+        pot = self._apply_s3_potential_boost(pot)
         spk = sf.fire(pot)
         winners = sf.get_k_winners(pot, 1, self.r3, spk)
         return self._decision_from_winners(winners)
@@ -194,6 +197,31 @@ class PaperMozafariMNIST2018(nn.Module):
         if len(winners) == 0:
             return -1
         return int(self.decision_map[int(winners[0][0])])
+
+    def set_s3_potential_boost(self, boost: Optional[Tensor]) -> None:
+        if boost is None:
+            self.s3_potential_boost = None
+            return
+        self.s3_potential_boost = boost.detach().float().to(next(self.parameters()).device)
+
+    def clear_s3_potential_boost(self) -> None:
+        self.s3_potential_boost = None
+
+    def _apply_s3_potential_boost(self, pot: Tensor) -> Tensor:
+        boost = self.s3_potential_boost
+        if boost is None or boost.numel() == 0:
+            return pot
+        boost = boost.to(device=pot.device, dtype=pot.dtype)
+        if pot.ndim == 3 and int(pot.shape[0]) == int(boost.numel()):
+            reference = pot.detach().amax().clamp_min(0.0)
+            return pot + boost.view(-1, 1, 1) * reference
+        if pot.ndim == 4 and int(pot.shape[1]) == int(boost.numel()):
+            reference = pot.detach().amax(dim=(1, 2, 3), keepdim=True).clamp_min(0.0)
+            return pot + boost.view(1, -1, 1, 1) * reference
+        if pot.ndim == 4 and int(pot.shape[0]) == int(boost.numel()):
+            reference = pot.detach().amax().clamp_min(0.0)
+            return pot + boost.view(-1, 1, 1, 1) * reference
+        return pot
 
     def stdp(self, layer_idx: int) -> None:
         if layer_idx == 1:
@@ -237,6 +265,7 @@ class PaperMozafariMNIST2018(nn.Module):
             s3_input = s3_input.squeeze(0)
         s3_input = s3_input.float().to(next(self.parameters()).device)
         pot = self.conv3(s3_input)
+        pot = self._apply_s3_potential_boost(pot)
         spk = sf.fire(pot)
         winners = sf.get_k_winners(pot, 1, self.r3, spk)
         self._store_context(s3_input, pot, spk, winners)
