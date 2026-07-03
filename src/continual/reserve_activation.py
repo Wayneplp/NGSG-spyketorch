@@ -358,6 +358,7 @@ class ReserveActivation:
             "recruitment_rate": float(recruited / samples) if samples > 0 else 0.0,
             "failed_recruitment": float(self.stats.get("failed_recruitment", 0.0)),
             "skip_stats": skip_stats,
+            "skipped_low_novelty": float(self.stats.get("skipped_low_novelty", 0.0)),
             "recruited_by": recruit_by,
             "random_recruitment": self.config.random_recruitment,
             "recruit_condition": self.config.recruit_condition,

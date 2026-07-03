@@ -909,29 +909,38 @@ class BaselineTrainer:
                             winner_class = self._winner_class(model, winner_idx, decision)
                             if 0 <= winner_class < len(winner_class_counts):
                                 winner_class_counts[winner_class] += 1
+                    update_decision = decision
                     if apply_reserve and reserve_activation is not None:
-                        reserve_activation.maybe_reroute(
+                        rerouted = reserve_activation.maybe_reroute(
                             model,
                             natural_winner_idx=winner_idx,
                             target_class=target,
                             stage_name=stage_name,
                             decision=decision if decision != -1 else None,
                         )
+                        if rerouted:
+                            update_winner_idx = self._first_winner_index(model)
+                            if update_winner_idx is not None:
+                                update_decision = self._winner_class(model, update_winner_idx, decision)
                     if decision != -1:
                         if decision == target:
                             batch_correct += 1
+                        else:
+                            batch_wrong += 1
+                    else:
+                        batch_silent += 1
+
+                    if update_decision != -1:
+                        if update_decision == target:
                             if apply_sdpm:
                                 sdpm_gate.gated_reward(model)
                             else:
                                 model.reward()
                         else:
-                            batch_wrong += 1
                             if apply_sdpm:
                                 sdpm_gate.gated_punish(model)
                             else:
                                 model.punish()
-                    else:
-                        batch_silent += 1
                     samples += 1
                     if progress_every > 0 and samples % progress_every == 0:
                         train_acc_proxy = float(correct + batch_correct) / max(samples, 1)
