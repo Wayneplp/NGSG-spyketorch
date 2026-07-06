@@ -2,37 +2,36 @@
   "run_name": "partition_group_diagnosis_medium_seed0",
   "method": "diagnostic",
   "seed": 0,
+  "server_commit": "3f97631",
   "protocol": {
     "train_samples_per_label": 100,
-    "test_samples_per_label": 100,
     "task1_s3_epochs": 50,
-    "checkpoint_stage": "task1",
-    "config": "configs/ngsg/partition_group_diagnosis_medium.yaml"
+    "checkpoint_stage": "task1"
   },
   "role_counts": {
     "stable": 61,
-    "shared": 63,
-    "reserve": 76,
+    "shared": 59,
+    "reserve": 80,
     "dead": 0
   },
-  "embedded_task1_accuracy": 0.779,
+  "embedded_task1_accuracy": 0.772,
   "task1_test_after_task1": {
-    "all_200": 0.765,
-    "stable_only": 0.764,
-    "shared_only": 0.266,
-    "reserve_only": 0.101,
-    "mask_stable": 0.254,
-    "mask_shared": 0.761,
-    "mask_reserve": 0.766
+    "all_200": 0.775,
+    "stable_only": 0.775,
+    "shared_only": 0.203,
+    "reserve_only": 0.073,
+    "mask_stable": 0.193,
+    "mask_shared": 0.774,
+    "mask_reserve": 0.774
   },
   "winner_role_fractions_all_200": {
-    "stable": 0.978,
-    "shared": 0.016,
-    "reserve": 0.006
+    "stable": 0.984,
+    "shared": 0.008,
+    "reserve": 0.008
   },
-  "notes": "Task1-only checkpoint after S3 training. Group-only / group-masked WTA readout with decision_map. stable-only matches all-200 (-0.1 pp); mask-reserve unchanged (+0.1 pp); mask-stable collapses. Medium diagnostic only (not full 600-epoch protocol).",
+  "notes": "Server authoritative run. stable-only equals all-200; mask-stable collapses; reserve-only near chance.",
   "source": {
-    "local_run_dir": "experiments/partition_group_diagnosis_medium_seed0",
-    "script": "scripts/eval_partition_group_diagnosis.py"
+    "server_run_dir": "/root/autodl-tmp/NGSG-spyketorch-4a958ae/experiments/partition_group_diagnosis_medium_seed0",
+    "artifact": "diagnostics/partition_counterfactuals.json"
   }
 }

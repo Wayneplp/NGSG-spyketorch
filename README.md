@@ -1,13 +1,63 @@
 # NGSG SpykeTorch 项目手册
 
-最后更新：2026-07-06（partition 组诊断 + task-aware 读出消融已跑通；论文叙事收敛到 WTA 历史分区）
+最后更新：2026-07-06（**§0.0 服务器 P0 PASS** — 6.1/6.2 + random/shuffle 反事实已同步）
 
-这个仓库只保留两个主要 Markdown 入口：
+这个仓库只保留三个主要 Markdown 入口：
 
 - `README.md`：当前项目状态、配置选择、运行命令、复现计划和 NGSG 实现路线。
 - `CATASTROPHIC_FORGETTING_REPRODUCTION.md`：灾难性遗忘 baseline 的历史实验记录和结果日志。
+- `实验列表.md`：WTA 分区生死实验优先级与判据。
 
 其他旧的计划文档、配置 README 和模块 README 已合并到本文件，避免之后不知道该看哪一个。
+
+## 0.0 WTA 分区组诊断 + P0 反事实（medium seed0，服务器 2026-07-06）— **PASS**
+
+**Run：** partition_group_diagnosis_medium_seed0 · **服务器 commit：** 3f97631  
+**协议：** medium Task1 结束后（未训 Task2）；100/class，S3 50 epoch · **分区：** stable **61** / shared **59** / reserve **80** / dead **0**  
+**产物：** 服务器 diagnostics/partition_counterfactuals.json；git published_results/diagnostics/partition_counterfactuals_medium_seed0.json  
+**本机镜像（不进 git）：** experiments/server_partition_group_diagnosis_medium_seed0/
+
+### 6.1 Group-only（只用某一组神经元推理 Task1）
+
+| 条件 | 用哪些神经元 | Task1 准确率 | vs 200 全用 |
+| --- | ---: | ---: | ---: |
+| **all-200（baseline）** | 200 | **77.50%** | — |
+| **stable-only** | 61 | **77.50%** | **0.00 pp** |
+| shared-only | 59 | 20.30% | -57.20 pp |
+| reserve-only | 80 | 7.30% | -70.20 pp |
+
+测试时 natural WTA 的 winner：**98.4%** 来自 stable，shared **0.8%**，reserve **0.8%**。
+
+### 6.2 Group-masked（屏蔽某一组再推理 Task1）
+
+| 条件 | 屏蔽谁 | Task1 准确率 | vs 200 全用 |
+| --- | ---: | ---: | ---: |
+| **mask-reserve** | reserve（80） | **77.40%** | **-0.10 pp** |
+| mask-shared | shared（59） | 77.40% | -0.10 pp |
+| **mask-stable** | stable（61） | **19.30%** | **-58.20 pp** |
+
+embedded trainer.evaluate Task1 acc：**77.2%**。
+
+### P0 反事实对照（10 seeds，k=61）
+
+| 对照 | Task1 准确率 | vs WTA | 判据 |
+| --- | ---: | ---: | --- |
+| random stable-only | **52.06% ± 6.09 pp** | -25.4 pp vs WTA stable-only | **PASS** |
+| random mask-stable | **70.19% ± 2.94 pp** | vs mask WTA stable 19.30% | **PASS** |
+| shuffled winner-history stable-only | 64.30% / 49.30% / 55.90% | 不再 ≈ all | **PASS** |
+| frequency-only stable-only | 77.50%（= WTA） | — | **NARROW** |
+
+**Caveat：** dead=0，matched-active random 与普通 random 相同。
+
+### 结论
+
+1. **Task1 几乎全靠 stable** — 61 个 stable = 200 个全用（77.5%）。
+2. **reserve / shared 对 Task1 自然推理几乎无贡献** — mask-reserve / mask-shared 各 -0.1 pp；reserve-only ≈ 7.3%。
+3. **stable 是 Task1 推理必要条件** — mask-stable → 19.3%。
+4. **非随机、非任意 mask** — random 61 仅 52%；random mask 70%；只有 mask **WTA stable** 才崩。
+5. **工程含义** — shared + reserve（**139 个**）可作 Task2 容量池；Task1 由 stable **61** 承担。
+
+**仍缺：** P0-3 seed 1/2、**P0-4 full Task1**（主文硬门槛）。详见 实验列表.md。
 
 ## 0. 最新正式 SDPM-only full 结果（2026-07-06）
 
@@ -64,7 +114,7 @@ SDPM 摘要（Task2，`result.json` extra）：`gate_mean≈0.973`，`protected_
 | --- | --- | --- |
 | paper-source catastrophic baseline | 已完成完整服务器复现 | 遗忘趋势和论文基本对齐，可作为主 baseline（§0.1）。 |
 | **SDPM-only full（600/100 epoch）** | **已完成**（`paper_full_sdpm_only_seed0`） | **Task1 after Task2 +9.03 pp vs baseline full**；当前主方法数值结果。 |
-| **partition 组推理诊断（6.1/6.2）** | **medium Task1 已完成** | stable 承载 Task1；reserve 对 Task1 推理几乎无贡献（§0.5）。 |
+| **partition 组推理 + P0 反事实** | **medium seed0 PASS** | **§0.0：random/shuffle 证伪失败；mask WTA stable 特异** |
 | **task-aware readout 消融** | **medium Task2 已完成** | MNIST +4.1 pp / EMNIST +3.3 pp vs 标准 WTA（§0.6）。 |
 | winner-frequency / winner_label_counts | 已接入并完成 no-op 对照 | medium 下不扰动 baseline。 |
 | `occupancy_stats.py` + `neuron_partition.py` | 已实现并验证 | full：stable 60 / shared 60 / reserve 80；medium：61/63/76。 |
@@ -204,30 +254,26 @@ forward → natural WTA winner → decision（用于 acc 统计）
 
 本机服务器产物副本：`experiments/server_noop_medium_baseline_seed0/`、`experiments/server_noop_medium_logging_seed0/`、`experiments/server_paper_medium_partition_seed0/`。本机汇总产物：`experiments/diagnostics/noop_medium_controls/noop_medium_controls_summary.json` 和 `experiments/diagnostics/noop_medium_controls/noop_medium_controls_summary.csv`。
 
-## 0.5 Partition 组推理诊断（Task1 结束后，medium，2026-07-06）
+## 0.5 Partition 组推理诊断 — 协议与复现（结论见 §0.0）
 
-目的：验证 stable/shared/reserve 分区是否具有 **功能意义**（不是贴标签），并判断 Task2 可动用哪些神经元池。
+§0.0 已记录 **6.1 / 6.2 完整数据与结论**。本节补充实验目的、协议细节与命令。
 
-协议：Task1 训练完成后立即在 MNIST 测试集上评估；**未训练 Task2**。每类 100 train/test，S3 50 epoch；partition 为 stable 61 / shared 63 / reserve 76。推理使用标准 `decision_map` + global WTA，仅在指定神经元子集内竞争（group-only / group-masked）。
+**目的：** 验证 stable/shared/reserve 分区是否具有 **功能意义**（不是贴标签），并判断 Task2 可动用哪些神经元池。
 
-| 诊断 | 条件 | Task1 准确率 | vs all-200 |
+**协议：** Task1 训练完成后立即在 MNIST 测试集上评估；**未训练 Task2**。每类 100 train/test，S3 50 epoch；partition 为 stable 61 / shared 63 / reserve 76。推理使用标准 `decision_map` + global WTA，仅在指定神经元子集内竞争（group-only / group-masked）。
+
+**结果摘要（与 §0.0 一致）：**
+
+| 类型 | 关键条件 | Task1 acc | vs all-200 |
 | --- | --- | ---: | ---: |
-| baseline | all-200 | **76.50%** | — |
-| **6.1 group-only** | stable-only (61) | **76.40%** | **-0.10 pp** |
-| 6.1 group-only | shared-only (63) | 26.60% | -49.90 pp |
-| 6.1 group-only | reserve-only (76) | 10.10% | -66.40 pp |
-| **6.2 group-masked** | mask-reserve | **76.60%** | **+0.10 pp** |
-| 6.2 group-masked | mask-shared | 76.10% | -0.40 pp |
-| 6.2 group-masked | mask-stable | 25.40% | -51.10 pp |
+| 6.1 | stable-only (61) | 76.40% | -0.10 pp |
+| 6.1 | reserve-only (76) | 10.10% | -66.40 pp |
+| 6.2 | mask-reserve | 76.60% | +0.10 pp |
+| 6.2 | mask-stable | 25.40% | -51.10 pp |
 
-测试时 natural WTA winner 来源：stable **97.8%**，shared 1.6%，reserve 0.6%。
+natural WTA winner：stable 97.8% / shared 1.6% / reserve 0.6%。
 
-结论：
-
-1. **Task1 推理几乎完全由 stable 池承担**；仅 61 个 stable 神经元即可复现 200 神经元时的 Task1 精度。
-2. **reserve 对 Task1 测试读出头几乎无贡献**（mask-reserve 不变；reserve-only ≈ 随机）。
-3. **shared 对 Task1 自然 WTA 贡献极小**（mask-shared -0.4 pp），但 shared-only 仍有 26.6% 信号，说明学过 Task1、只是很少在竞争中获胜。
-4. medium 上 Task1 总精度约 **77.9%**（非 full 的 ~93%）；**相对关系**（stable 主导）预期在 full 上仍成立，待 full Task1 checkpoint 复验。
+**注意：** medium 上 embedded Task1 acc ≈ 77.9%（非 full ~93%）；相对关系（stable 主导）待 full Task1 checkpoint 复验（§0.8 P0-4）。
 
 运行：
 
@@ -271,7 +317,7 @@ python scripts/eval_readout_ablation.py --run-dir experiments/readout_ablation_m
 
 | 论点 | 支撑 |
 | --- | --- |
-| 分区不是随机分组 | stable-only ≈ all-200；reserve-only ≈ chance；待补 random-partition 对照 |
+| 分区不是随机分组 | **P0 PASS**：random 61 → 52% vs WTA stable 77.5%（§0.0） |
 | 分区不是贴标签 no-op | logging+partition 不改变训练指标（§0.4）；功能意义在读出/招募 |
 | stable 承载 Task1 | §0.5 group 诊断 |
 | task-aware 读出有效 | §0.6 readout 消融 |
@@ -279,6 +325,83 @@ python scripts/eval_readout_ablation.py --run-dir experiments/readout_ablation_m
 | reserve 学 Task2 且不抢 Task1 | **未完成**；当前 reserve 训练有 train–test mismatch（§0.3.1） |
 
 当前主结果仍是 **SDPM-only full**；下一阶段重点是 **reserve 定向学习 + 推理时 group 竞争不与 stable 抢 Task1**。
+
+## 0.8 WTA 分区生死实验路线图（2026-07-06）
+
+排序原则：**跑完能证明或证伪 WTA 分区 claim**；若无效则立刻舍弃或重做算法。
+
+### 已有正证据 + P0 反事实（seed 0 medium，2026-07-06）
+
+- stable-only ≈ all-200（**77.50%**）
+- mask WTA stable 崩（**19.30%**）
+- **random stable-only 52.06%** — 随机不行 ✅
+- **random mask-stable 70.19%** vs mask WTA stable 19.30% — 只有 WTA stable 特异 ✅
+- **shuffled history** stable-only 64/49/56% — 打乱不行 ✅
+- frequency-only = WTA — claim 可收窄为 winner-frequency ⚠️
+
+**仍缺：** P0-3 seed 1/2、**P0-4 full**
+
+### P0：生死实验（先跑）
+
+| # | 实验 | 证明/证伪 | 失败含义 |
+| ---: | --- | --- | --- |
+| 1 | **random same-size partition 对照** | 随机选同样数量神经元，是否也能 stable-only≈all | 随机 61 个也接近 all → WTA stable 不特殊，claim 倒 |
+| 2 | **winner-history shuffled partition** | 打乱 winner history 后重分区是否失效 | 打乱仍有效 → 不是 WTA 历史在起作用 |
+| 3 | **multi-seed medium diagnosis** | seed 0/1/2 是否都 stable-only≈all、mask-stable 崩 | 仅 seed0 → 不稳定，不能作主 claim |
+| 4 | **full-scale partition diagnosis** | full Task1 后是否 stable 主导 | full 不成立 → 只能写 medium 诊断现象 |
+| 5 | **random mask-stable 对照** | 随机 mask 同数量神经元是否也崩 | 随机 mask 也崩 → 冗余太低，非 stable 特异 |
+
+### P1：强证据（决定 claim 能写多强）
+
+| # | 实验 | 证明/证伪 | 失败含义 |
+| ---: | --- | --- | --- |
+| 6 | per-class stable coverage | 每类是否都有 stable 承载 | 只覆盖少数类 → 改写成部分类别主导 |
+| 7 | stable selectivity / purity | stable 是否高频且对 Task1 有选择性 | 只高响应不 selective → 解释变弱 |
+| 8 | frequency / selectivity / combo 消融 | 分区规则是否需组合指标 | frequency-only 就够 → 算法应简化 |
+| 9 | threshold sensitivity | 改 percentile / q_min 结论是否稳 | 稍变就失效 → 调参产物 |
+| 10 | training-time emergence | stable 是否随 Task1 训练逐渐形成 | 后验偶然切出 → 机制说法变弱 |
+
+### P2：应用验证（非 WTA 生死线）
+
+| # | 实验 | 作用 |
+| ---: | --- | --- |
+| 11 | task-aware readout full 复验 | 分区/label counts 能否改进读出（需 task-aware 设定） |
+| 12 | SDPM random protection vs WTA protection | occupancy 软保护是否优于随机少更新 |
+| 13 | hard-freeze stable vs SDPM | 是否等价于冻结旧神经元 |
+| 14 | SDPM multi-seed | 加强应用结果 |
+| 15 | reserve 修正 / random reserve / Task2 win rate | 暂后置；当前 reserve 干扰主线 |
+
+### 最短必跑组合（5 项）
+
+1. random same-size stable-only / mask 对照
+2. winner-history shuffled partition
+3. medium seed 1/2 partition diagnosis
+4. full partition group diagnosis
+5. frequency-only vs current partition 消融
+
+**跑完后的决策树：**
+
+- random/shuffled 也有效 → 当前分区 claim **不成立**，重做算法
+- medium 支持、full 不支持 → 只能写 medium 诊断，**不能作主贡献**
+- 仅 frequency-only 有效 → 收窄为「winner-frequency identifies task-bearing neurons」
+- 五项全支持 → WTA 分区是真实、非随机、可复现的机制点
+
+### 命令（P0 #1/#2/#5 可在已有 checkpoint 上后验跑）
+
+```bash
+# 反事实对照（#1/#2/#5）：无需重训，10 个 random seed
+python scripts/eval_partition_group_diagnosis.py \
+  --run-dir experiments/partition_group_diagnosis_medium_seed0 \
+  --counterfactuals --device cuda \
+  --write-json experiments/partition_group_diagnosis_medium_seed0/diagnostics/partition_counterfactuals.json
+
+# multi-seed medium（#3）
+python scripts/eval_partition_group_diagnosis.py --config configs/ngsg/partition_group_diagnosis_medium_seed1.yaml --train-task1 --device cuda
+python scripts/eval_partition_group_diagnosis.py --config configs/ngsg/partition_group_diagnosis_medium_seed2.yaml --train-task1 --device cuda
+
+# full Task1 诊断（#4，600 epoch，耗时长）
+python scripts/eval_partition_group_diagnosis.py --config configs/ngsg/partition_group_diagnosis_full.yaml --train-task1 --device cuda
+```
 
 ## 1. 当前目标
 
@@ -521,9 +644,11 @@ Task2 训练顺序（full NGSG）：forward → novelty 判定 → 可选 reserv
 
 ## 12. 下一步优先级
 
-1. ⬜ full partition 组诊断（Task1 结束后，`save_task1_model: true`）。
-2. ⬜ random-partition / `paper_medium_random_reserve_seed0` 对照。
-3. ⬜ reserve train–test 对齐：Task2 test-time reserve win rate + reroute 条件修正。
-4. ⬜ full SDPM-only 多 seed（1/2）。
-5. ⬜ full task-aware readout 与 full NGSG（reserve 机制稳定后）。
+**WTA 分区生死线（见 §0.8 P0）— 最短必跑 5 项优先于 reserve/SDPM 扩展。**
+
+1. ⬜ P0 #1/#2/#5：`--counterfactuals` 于 seed0 checkpoint（脚本已支持）。
+2. ⬜ P0 #3：medium seed 1/2 partition diagnosis。
+3. ⬜ P0 #4：full partition group diagnosis（600 epoch）。
+4. ⬜ P1：per-class coverage、threshold sweep、frequency-only 正式对比。
+5. ⬜ P2：task-aware readout full、SDPM multi-seed；reserve 修正暂后置。
 6. 维护 `published_results/` 精简 JSON；大产物保留在 `experiments/`（不进 git）。
