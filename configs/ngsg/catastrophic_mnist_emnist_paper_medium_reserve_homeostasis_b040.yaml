@@ -1,0 +1,138 @@
+# Medium-scale reserve homeostasis ablation (boost sweep: 0.40).
+# Reserve neurons receive an early decaying potential boost inside natural WTA.
+# No ctx["winners"] reroute is used; STDP updates the actual WTA winner.
+method: catastrophic
+seed: 0
+run_name: null
+
+data:
+  dataset_name: paper_mnist_emnist
+  data_root: data
+  input_size: 28
+  input_channels: 1
+  num_classes: 10
+  normalize: false
+  subset_seed: 0
+  preprocess_cache: true
+  preprocess_cache_root: data/preprocessed/paper_source
+tasks:
+  task_specs:
+    - name: initial_mnist_digits
+      dataset:
+        dataset_name: mnist
+        data_root: data/mnist
+        normalize: false
+      labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      train_samples_per_label: 100
+      test_samples_per_label: 100
+    - name: subsequent_emnist_capitals_ABDEGHNQRS
+      dataset:
+        dataset_name: emnist
+        split: letters
+        data_root: data/emnist
+        normalize: false
+        fix_orientation: true
+      labels: [1, 2, 4, 5, 7, 8, 14, 17, 18, 19]
+      mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      train_samples_per_label: 100
+      test_samples_per_label: 100
+  task_order: [0, 1]
+
+model:
+  architecture: paper_spyketorch
+  time_steps: 15
+  num_classes: 10
+  neurons_per_class: 20
+  s3_neurons: 200
+  s1_maps: 30
+  s2_maps: 250
+  conv1_kernel: 5
+  conv2_kernel: 3
+  conv3_kernel: 5
+  conv1_threshold: 15.0
+  conv2_threshold: 10.0
+  conv1_kwta: 5
+  conv2_kwta: 8
+  conv1_inhibition_radius: 0
+  conv2_inhibition_radius: 0
+  conv3_inhibition_radius: 0
+  weight_mean: 0.8
+  weight_std: 0.05
+  filter_threshold: 50.0
+  local_normalization_radius: 8
+
+continual:
+  sdpm_gate:
+    enabled: false
+  neuron_partition:
+    enabled: true
+    f_stable_percentile: 0.70
+    f_shared_percentile: 0.40
+    q_stable_min: 0.60
+    importance:
+      use_weight_strength: true
+  reserve_activation:
+    enabled: true
+    apply_stages: [task2]
+    novelty_threshold: 0.15
+    use_class_local: true
+    recruit_roles: [reserve]
+    random_recruitment: false
+    reroute_updates: false
+    homeostatic_boost: true
+    homeostatic_boost_initial: 0.4
+    homeostatic_boost_start_epoch: 1
+    homeostatic_boost_decay_epochs: 5
+    homeostatic_boost_roles: [reserve]
+
+train:
+  batch_size: 1000
+  s3_cached_batch_size: 256
+  num_workers: 0
+  pin_memory: true
+  learning_rule: paper_source_rstdp
+  num_epochs_task1: 50
+  num_epochs_task2: 10
+  s1_stdp_epochs_task1: 2
+  s2_stdp_epochs_task1: 4
+  s1_stdp_epochs_task2: 2
+  s2_stdp_epochs_task2: 4
+  paper_adaptive_int: 0.5
+  paper_adaptive_min: 0.0
+  reset_learning_rates_each_stage: true
+  progress_interval_samples: 1000
+  winner_frequency_log:
+    enabled: true
+    top_k: 10
+    include_counts: true
+  shuffle: true
+  feature_checkpoint:
+    enabled: true
+    root_dir: checkpoints/features
+    load: true
+    save: true
+    fallback_match: true
+  c2_feature_cache:
+    enabled: true
+    root_dir: data/features/c2
+    batch_size: 256
+    preload: true
+    preload_pin_memory: false
+    pin_memory: true
+    num_workers: 0
+
+eval:
+  batch_size: 1000
+  pin_memory: true
+  measure_forgetting: true
+  save_intermediate_metrics: true
+  metric_names:
+    task1_after_task1: initial_training_mnist
+    task1_after_task2: subsequent_training_mnist
+    task2_after_task2: subsequent_training_emnist
+
+output:
+  root_dir: experiments
+  summary_csv: results/baseline_summary.csv
+  save_task2_model: true

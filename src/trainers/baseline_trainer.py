@@ -90,6 +90,16 @@ class BaselineTrainer:
             neuron_partition=neuron_partition,
         )
         reserve_activation = self.fit_reserve_activation_after_task1(model, config, neuron_partition)
+        if reserve_activation is not None and reserve_activation.enabled:
+            reserve_activation.transfer_weights(model)
+            if reserve_activation.config.weight_transfer:
+                print(
+                    f"[weight transfer] source={reserve_activation.stats.get('weight_transfer_source_count', 0):.0f} "
+                    f"target={reserve_activation.stats.get('weight_transfer_target_count', 0):.0f} "
+                    f"transferred={reserve_activation.stats.get('weight_transfer_transferred', 0):.0f} "
+                    f"sigma={reserve_activation.stats.get('weight_transfer_noise_sigma', 0):.3f}",
+                    flush=True,
+                )
         if neuron_partition is not None and neuron_partition.enabled:
             task1_training_stats["neuron_partition"] = neuron_partition.to_dict(include_arrays=True)
 
@@ -874,8 +884,26 @@ class BaselineTrainer:
             print(f"[paper s3] SDPM gate active for stage={stage_name}", flush=True)
         if apply_reserve:
             print(f"[paper s3] reserve activation active for stage={stage_name}", flush=True)
+            if reserve_activation is not None and reserve_activation.uses_homeostatic_boost():
+                print(f"[paper s3] reserve homeostatic boost active for stage={stage_name}", flush=True)
         for epoch_idx in range(epochs):
             model.train()
+            if apply_reserve and reserve_activation is not None and reserve_activation.uses_homeostatic_boost():
+                boost = reserve_activation.homeostatic_boost_vector(
+                    num_neurons=num_s3_neurons,
+                    epoch_index=epoch_idx,
+                )
+                if hasattr(model, "set_s3_potential_boost"):
+                    model.set_s3_potential_boost(boost)
+                boost_scale = reserve_activation.homeostatic_boost_scale(epoch_idx)
+                if boost_scale > 0.0:
+                    print(
+                        f"[paper s3] epoch {epoch_idx + 1}/{epochs} "
+                        f"reserve_homeostatic_boost={boost_scale:.4f}",
+                        flush=True,
+                    )
+            elif hasattr(model, "clear_s3_potential_boost"):
+                model.clear_s3_potential_boost()
             correct = 0
             wrong = 0
             silent = 0
@@ -912,7 +940,11 @@ class BaselineTrainer:
                             if 0 <= winner_class < len(winner_class_counts):
                                 winner_class_counts[winner_class] += 1
                     update_decision = decision
-                    if apply_reserve and reserve_activation is not None:
+                    if (
+                        apply_reserve
+                        and reserve_activation is not None
+                        and reserve_activation.uses_reroute()
+                    ):
                         rerouted = reserve_activation.maybe_reroute(
                             model,
                             natural_winner_idx=winner_idx,
@@ -1005,6 +1037,8 @@ class BaselineTrainer:
                 f"eta={self._format_seconds(remaining_seconds)}",
                 flush=True,
             )
+        if hasattr(model, "clear_s3_potential_boost"):
+            model.clear_s3_potential_boost()
         output_stats: Dict[str, Any] = {
             "stage": "s3",
             "epochs": epochs,
