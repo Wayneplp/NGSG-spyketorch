@@ -93,6 +93,8 @@ class BaselineTrainer:
         if neuron_partition is not None and neuron_partition.enabled:
             task1_training_stats["neuron_partition"] = neuron_partition.to_dict(include_arrays=True)
 
+        self._maybe_save_task1_model(model, config)
+
         train_task2_loader = self.build_task2_train_loader(task1, task2, config)
         if bool(config.get("train", {}).get("feature_only", False)):
             task2_training_stats = self.train_single_task(
@@ -1365,6 +1367,24 @@ class BaselineTrainer:
                 "reserve-only training supports train-test STDP reroute mismatch."
             ),
         }
+
+    def _maybe_save_task1_model(self, model: nn.Module, config: Mapping[str, Any]) -> Optional[str]:
+        output_cfg = config.get("output", {})
+        if not bool(output_cfg.get("save_task1_model", False)):
+            return None
+        run_name = str(config.get("run_name", "unnamed_run"))
+        root_dir = Path(str(output_cfg.get("root_dir", "experiments")))
+        save_dir = root_dir / run_name / "artifacts"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        save_path = save_dir / "model_after_task1.pt"
+        payload = {
+            "model_state_dict": model.state_dict(),
+            "decision_map": getattr(model, "decision_map", None),
+            "run_name": run_name,
+            "stage": "task1",
+        }
+        torch.save(payload, save_path)
+        return str(save_path)
 
     def _maybe_save_task2_model(self, model: nn.Module, config: Mapping[str, Any]) -> Optional[str]:
         output_cfg = config.get("output", {})

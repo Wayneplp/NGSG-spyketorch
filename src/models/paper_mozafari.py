@@ -242,6 +242,19 @@ class PaperMozafariMNIST2018(nn.Module):
         self._store_context(s3_input, pot, spk, winners)
         return self._decision_from_winners(winners)
 
+    @torch.no_grad()
+    def forward_s3_potentials(self, image: Tensor) -> Tensor:
+        """Eval-mode forward through S3, returning conv3 potentials."""
+        if image.ndim == 3 or (image.ndim == 4 and image.shape[0] == 1):
+            image = image.squeeze(0) if image.ndim == 4 else image
+        input_spikes = self.encode(image)
+        input_spikes = sf.pad(input_spikes.float(), (2, 2, 2, 2), 0)
+        pot = self.conv1(input_spikes)
+        spk, pot = sf.fire(pot, self.conv1_t, True)
+        pot = self.conv2(sf.pad(sf.pooling(spk, 2, 2), (1, 1, 1, 1)))
+        spk, pot = sf.fire(pot, self.conv2_t, True)
+        return self.conv3(sf.pad(sf.pooling(spk, 3, 3), (2, 2, 2, 2)))
+
     def predict_from_s3_input(self, s3_input: Tensor) -> int:
         was_training = self.training
         self.eval()
