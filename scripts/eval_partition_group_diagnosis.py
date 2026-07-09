@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Task1 group-only / group-masked inference diagnosis (sections 6.1 and 6.2)."""
 
 from __future__ import annotations
@@ -520,7 +520,8 @@ def run_counterfactuals(
             ~stable_mask,
             num_classes=num_classes,
         )["per_class"],
-    }    random_stable_trials = []
+    }
+    random_stable_trials = []
     for seed, pick in random_masks["random_stable_only"]:
         row = evaluate_with_allow_mask(
             model,
@@ -621,6 +622,22 @@ def run_counterfactuals(
         }
     payload["shuffled_history_partition"] = shuffled_rows
 
+    label_shuffled_rows = {}
+    for seed in counterfactual_seeds[:3]:
+        shuffled = label_shuffled_fixed_frequency_partition(
+            partition,
+            seed=int(seed),
+            winner_label_counts=winner_label_counts,
+            num_classes=num_classes,
+        )
+        diag = evaluate_group_diagnosis(model, trainer, test_loader, device, shuffled, decision_map)
+        label_shuffled_rows[f"seed_{seed}"] = {
+            "role_counts": shuffled.counts_by_role(),
+            "stable_only": diag["stable_only"]["accuracy"],
+            "mask_stable": diag["mask_stable"]["accuracy"],
+            "all_200": diag["all_200"]["accuracy"],
+        }
+    payload["label_shuffled_fixed_frequency_partition"] = label_shuffled_rows
     freq_partition = frequency_only_partition(partition)
     freq_diag = evaluate_group_diagnosis(model, trainer, test_loader, device, freq_partition, decision_map)
     payload["frequency_only_partition"] = {
@@ -663,6 +680,50 @@ def format_counterfactual_section(counterfactuals: Mapping[str, Any], *, baselin
             f"{std_acc * 100:.2f} pp | {(mean_acc - ref_acc) * 100:+.2f} pp |"
         )
 
+    coverage = counterfactuals.get("per_class_stable_coverage", {})
+    if coverage:
+        lines.extend(["", "### per-class stable coverage", ""])
+        lines.append(
+            f"- classes with stable winner coverage: {coverage.get('classes_with_winner_coverage', 0)}/10; "
+            f"static label coverage: {coverage.get('classes_with_static_label_coverage', 0)}/10; "
+            f"dominant label coverage: {coverage.get('classes_with_dominant_label_coverage', 0)}/10; "
+            f"top-winner covered: {coverage.get('classes_with_top_winner_covered', 0)}/10"
+        )
+        lines.append(
+            f"- stable winner-event fraction: mean {float(coverage.get('mean_winner_event_fraction', 0.0)) * 100:.2f}%, "
+            f"min {float(coverage.get('min_winner_event_fraction', 0.0)) * 100:.2f}%"
+        )
+        acc = coverage.get("per_class_accuracy", {})
+        acc_all = {int(row["class"]): row for row in acc.get("all_200", [])}
+        acc_stable = {int(row["class"]): row for row in acc.get("stable_only", [])}
+        acc_mask = {int(row["class"]): row for row in acc.get("mask_stable", [])}
+        lines.append("| class | stable winner frac | stable winner neurons | top role | all | stable-only | mask-stable |")
+        lines.append("| ---: | ---: | ---: | --- | ---: | ---: | ---: |")
+        for row in coverage.get("per_class", []):
+            cls = int(row.get("class", -1))
+            lines.append(
+                f"| {cls} | {float(row.get('covered_winner_fraction', 0.0)) * 100:.2f}% | "
+                f"{int(row.get('covered_winner_neurons', 0))} | {row.get('top_winner_role', 'none')} | "
+                f"{float(acc_all.get(cls, {}).get('accuracy', float('nan'))) * 100:.2f}% | "
+                f"{float(acc_stable.get(cls, {}).get('accuracy', float('nan'))) * 100:.2f}% | "
+                f"{float(acc_mask.get(cls, {}).get('accuracy', float('nan'))) * 100:.2f}% |"
+            )
+
+    random_coverage = counterfactuals.get("random_class_coverage", {})
+    if random_coverage:
+        lines.extend(["", "### random per-class coverage controls", ""])
+        lines.append("| control | n | winner classes mean/min/max | static classes mean/min/max | top-winner classes mean/min/max |")
+        lines.append("| --- | ---: | --- | --- | --- |")
+        for key, block in random_coverage.items():
+            winner = block.get("classes_with_winner_coverage", {})
+            static = block.get("classes_with_static_label_coverage", {})
+            top = block.get("classes_with_top_winner_covered", {})
+            lines.append(
+                f"| {key} | {block.get('n', 0)} | "
+                f"{float(winner.get('mean', 0.0)):.2f}/{float(winner.get('min', 0.0)):.0f}/{float(winner.get('max', 0.0)):.0f} | "
+                f"{float(static.get('mean', 0.0)):.2f}/{float(static.get('min', 0.0)):.0f}/{float(static.get('max', 0.0)):.0f} | "
+                f"{float(top.get('mean', 0.0)):.2f}/{float(top.get('min', 0.0)):.0f}/{float(top.get('max', 0.0)):.0f} |"
+            )
     shuffled = counterfactuals.get("shuffled_history_partition", {})
     if shuffled:
         lines.extend(["", "### shuffled winner-history partition", ""])
@@ -675,6 +736,17 @@ def format_counterfactual_section(counterfactuals: Mapping[str, Any], *, baselin
                 f"{float(row['mask_stable']) * 100:.2f}% | {counts} |"
             )
 
+    label_shuffled = counterfactuals.get("label_shuffled_fixed_frequency_partition", {})
+    if label_shuffled:
+        lines.extend(["", "### label-shuffled fixed-frequency partition", ""])
+        lines.append("| seed | stable-only | mask-stable | role counts |")
+        lines.append("| --- | ---: | ---: | --- |")
+        for seed_key, row in label_shuffled.items():
+            counts = row.get("role_counts", {})
+            lines.append(
+                f"| {seed_key} | {float(row['stable_only']) * 100:.2f}% | "
+                f"{float(row['mask_stable']) * 100:.2f}% | {counts} |"
+            )
     freq = counterfactuals.get("frequency_only_partition", {})
     if freq:
         lines.extend(["", "### frequency-only partition", ""])
@@ -728,6 +800,7 @@ def run_diagnosis(
     device: str,
     train_task1: bool,
     checkpoint_stage: str,
+    test_task: str,
     counterfactuals: bool = False,
     counterfactual_seeds: Optional[Sequence[int]] = None,
 ) -> Dict[str, Any]:
@@ -757,6 +830,7 @@ def run_diagnosis(
             raise FileNotFoundError(f"Missing result.json: {result_path}")
         result = load_json(result_path)
         trainer, model, torch_device = load_checkpoint(run_dir, config, device, stage=checkpoint_stage)
+        device = torch_device
         partition = NeuronPartition.from_role_payload(extract_partition_payload(result))
         embedded_acc = float((result.get("metrics") or {}).get("task1_after_task1", float("nan")))
         role_counts = partition.counts_by_role()
@@ -765,7 +839,11 @@ def run_diagnosis(
         raise ValueError("Neuron partition is required for group diagnosis.")
 
     task_bundles = build_task_bundles(config["data"], config["tasks"])
-    test_loader = trainer.build_eval_loader(task_bundles[0].test_dataset, config)
+    test_task_index = 1 if test_task == "task2" else 0
+    if test_task_index >= len(task_bundles):
+        raise ValueError(f"Requested {test_task}, but config only defines {len(task_bundles)} task(s).")
+    eval_bundle = task_bundles[test_task_index]
+    test_loader = trainer.build_eval_loader(eval_bundle.test_dataset, config)
     decision_map = getattr(model, "decision_map", None)
     if decision_map is None:
         raise ValueError("Model is missing decision_map.")
@@ -776,11 +854,20 @@ def run_diagnosis(
     summary = {
         "run_name": config.get("run_name") or result.get("run_name"),
         "checkpoint_stage": checkpoint_stage,
+        "test_task": test_task,
+        "test_task_index": test_task_index,
+        "test_task_name": getattr(eval_bundle, "name", test_task),
         "role_counts": role_counts,
         "embedded_task1_accuracy": embedded_acc,
-        "task1_test_after_task1": {key: rows[key] for key in rows if not key.startswith("_")},
+        "group_diagnosis": {key: rows[key] for key in rows if not key.startswith("_")},
     }
+    if test_task == "task1":
+        summary["task1_test_after_task1"] = summary["group_diagnosis"]
+    else:
+        summary["task2_test_after_task2"] = summary["group_diagnosis"]
     if counterfactuals:
+        if test_task != "task1":
+            raise ValueError("--counterfactuals currently only supports --test-task task1.")
         seeds = list(counterfactual_seeds or [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
         summary["counterfactuals"] = run_counterfactuals(
             model=model,
@@ -808,6 +895,12 @@ def parse_args() -> argparse.Namespace:
         help="Which saved checkpoint to load when not training.",
     )
     parser.add_argument("--device", default="auto", choices=("auto", "cpu", "cuda"))
+    parser.add_argument(
+        "--test-task",
+        choices=("task1", "task2"),
+        default="task1",
+        help="Which task test split to evaluate: task1/MNIST or task2/EMNIST.",
+    )
     parser.add_argument("--write-json", type=Path)
     parser.add_argument(
         "--counterfactuals",
@@ -856,14 +949,16 @@ def main() -> int:
         device=args.device,
         train_task1=args.train_task1,
         checkpoint_stage=checkpoint_stage,
+        test_task=args.test_task,
         counterfactuals=args.counterfactuals,
         counterfactual_seeds=cf_seeds,
     )
 
-    rows = dict(summary["task1_test_after_task1"])
+    rows = dict(summary["group_diagnosis"])
     rows["_role_counts"] = summary["role_counts"]
     print(f"# Partition group diagnosis: {summary['run_name']}")
     print(f"- checkpoint: {checkpoint_stage}")
+    print(f"- test task: {summary['test_task']} ({summary['test_task_name']})")
     print(f"- role counts: {summary['role_counts']}")
     print(f"- embedded trainer.evaluate Task1 acc: {summary['embedded_task1_accuracy']:.4f}")
     print()
@@ -878,14 +973,15 @@ def main() -> int:
     mask_reserve = float(rows["mask_reserve"]["accuracy"])
     print()
     print("## Interpretation")
+    eval_name = summary.get("test_task_name", summary.get("test_task", "test task"))
     if shared_only < 0.15 and reserve_only < 0.15 and stable_only > all_acc * 0.8:
-        print("- stable-only carries most Task1 accuracy; shared/reserve-only are near chance.")
+        print(f"- stable-only carries most {eval_name} accuracy; shared/reserve-only are near chance.")
     else:
-        print("- shared-only and/or reserve-only are not negligible on Task1; they still encode Task1 signal.")
+        print(f"- shared-only and/or reserve-only are not negligible on {eval_name}; they still encode task signal.")
     if mask_reserve >= all_acc - 0.02:
-        print("- mask-reserve barely changes Task1: reserve pool is not carrying old-task readout.")
+        print(f"- mask-reserve barely changes {eval_name}: reserve pool is not carrying this readout.")
     else:
-        print("- mask-reserve drops Task1 materially: reserve neurons participate in Task1 inference.")
+        print(f"- mask-reserve drops {eval_name} materially: reserve neurons participate in this inference.")
 
     if summary.get("counterfactuals"):
         print()
@@ -901,6 +997,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
 
 
 

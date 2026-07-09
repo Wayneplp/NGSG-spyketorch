@@ -1,0 +1,14 @@
+{
+  "run_name": "paper_full_partition_seed0",
+  "source": "local_diagnosis",
+  "checkpoint_stage": "task2",
+  "test_task": "task2",
+  "role_counts": {"stable": 60, "shared": 60, "reserve": 80, "dead": 0},
+  "group_diagnosis": {
+    "all_200": {"accuracy": 0.704375, "role_win_fractions": {"stable": 0.0895, "shared": 0.1845, "reserve": 0.726}},
+    "reserve_only": {"accuracy": 0.571375, "delta_vs_all_200_pp": -13.30},
+    "mask_stable": {"accuracy": 0.66575, "delta_vs_all_200_pp": -3.86},
+    "mask_reserve": {"accuracy": 0.305625, "delta_vs_all_200_pp": -39.88}
+  },
+  "note": "Diagnosis path (forward_potentials); not trainer.evaluate."
+}
