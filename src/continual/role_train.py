@@ -1,13 +1,206 @@
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
 from contextlib import contextmanager
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import torch
 from torch import Tensor, nn
 
 from .neuron_partition import NeuronPartition, NeuronRole
+
+
+def winner_distribution_metrics(counts: Sequence[int]) -> Dict[str, float]:
+    """Summarize WTA winner concentration from per-neuron win counts."""
+    total = float(sum(int(c) for c in counts))
+    if total <= 0.0:
+        return {
+            "unique_winners": 0.0,
+            "top1_winner_share": 0.0,
+            "top5_winner_share": 0.0,
+            "winner_entropy": 0.0,
+            "winner_entropy_normalized": 0.0,
+            "total_winner_events": 0.0,
+        }
+
+    sorted_counts = sorted((int(c) for c in counts), reverse=True)
+    unique = sum(1 for count in sorted_counts if count > 0)
+    top1 = sorted_counts[0] / total
+    top5 = sum(sorted_counts[:5]) / total
+    entropy = 0.0
+    for count in sorted_counts:
+        if count <= 0:
+            continue
+        prob = count / total
+        entropy -= prob * math.log(prob)
+    max_entropy = math.log(unique) if unique > 1 else 0.0
+    normalized = entropy / max_entropy if max_entropy > 0.0 else 0.0
+    return {
+        "unique_winners": float(unique),
+        "top1_winner_share": float(top1),
+        "top5_winner_share": float(top5),
+        "winner_entropy": float(entropy),
+        "winner_entropy_normalized": float(normalized),
+        "total_winner_events": total,
+    }
+
+
+@dataclass
+class RoleTrainCompetitionTracker:
+    """Task2 role-train competition / credit-assignment diagnostics."""
+
+    num_neurons: int
+    winner_counts: List[int] = field(default_factory=list)
+    forward_with_winner: int = 0
+    forward_silent: int = 0
+    stdp_eligible: int = 0
+    effective_stdp_updates: int = 0
+    gated_skipped_stdp: int = 0
+    updates_by_role: Dict[str, int] = field(default_factory=dict)
+    epoch_history: List[Dict[str, Any]] = field(default_factory=list)
+    _epoch_winner_counts: List[int] = field(default_factory=list, repr=False)
+    _epoch_forward_with_winner: int = field(default=0, repr=False)
+    _epoch_forward_silent: int = field(default=0, repr=False)
+    _epoch_stdp_eligible: int = field(default=0, repr=False)
+    _epoch_effective_stdp_updates: int = field(default=0, repr=False)
+    _epoch_gated_skipped_stdp: int = field(default=0, repr=False)
+    _epoch_updates_by_role: Dict[str, int] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        if not self.winner_counts:
+            self.winner_counts = [0] * int(self.num_neurons)
+        if not self.updates_by_role:
+            self.updates_by_role = self._empty_role_counter()
+        self._reset_epoch()
+
+    @staticmethod
+    def _empty_role_counter() -> Dict[str, int]:
+        return {"stable": 0, "shared": 0, "reserve": 0, "dead": 0, "unknown": 0}
+
+    def _reset_epoch(self) -> None:
+        self._epoch_winner_counts = [0] * int(self.num_neurons)
+        self._epoch_forward_with_winner = 0
+        self._epoch_forward_silent = 0
+        self._epoch_stdp_eligible = 0
+        self._epoch_effective_stdp_updates = 0
+        self._epoch_gated_skipped_stdp = 0
+        self._epoch_updates_by_role = self._empty_role_counter()
+
+    def begin_epoch(self) -> None:
+        self._reset_epoch()
+
+    def record_sample(
+        self,
+        *,
+        winner_idx: Optional[int],
+        forward_silent: bool,
+        stdp_eligible: bool,
+        multiplier: float,
+        update_applied: bool,
+        role_name: str,
+    ) -> None:
+        if forward_silent:
+            self.forward_silent += 1
+            self._epoch_forward_silent += 1
+        elif winner_idx is not None:
+            self.forward_with_winner += 1
+            self._epoch_forward_with_winner += 1
+            if 0 <= winner_idx < self.num_neurons:
+                self.winner_counts[winner_idx] += 1
+                self._epoch_winner_counts[winner_idx] += 1
+
+        if not stdp_eligible:
+            return
+
+        self.stdp_eligible += 1
+        self._epoch_stdp_eligible += 1
+        if update_applied:
+            self.effective_stdp_updates += 1
+            self._epoch_effective_stdp_updates += 1
+            bucket = role_name if role_name in self.updates_by_role else "unknown"
+            self.updates_by_role[bucket] = self.updates_by_role.get(bucket, 0) + 1
+            self._epoch_updates_by_role[bucket] = self._epoch_updates_by_role.get(bucket, 0) + 1
+            return
+
+        if winner_idx is not None and float(multiplier) == 0.0:
+            self.gated_skipped_stdp += 1
+            self._epoch_gated_skipped_stdp += 1
+
+    def _update_share_summary(
+        self,
+        *,
+        forward_with_winner: int,
+        stdp_eligible: int,
+        effective_stdp_updates: int,
+        gated_skipped_stdp: int,
+        updates_by_role: Mapping[str, int],
+    ) -> Dict[str, Any]:
+        forward_winners = max(int(forward_with_winner), 0)
+        eligible = max(int(stdp_eligible), 0)
+        effective = max(int(effective_stdp_updates), 0)
+        gated = max(int(gated_skipped_stdp), 0)
+        shared_updates = int(updates_by_role.get("shared", 0))
+        reserve_updates = int(updates_by_role.get("reserve", 0))
+        open_pool_updates = shared_updates + reserve_updates
+        role_update_share = {
+            role: float(int(updates_by_role.get(role, 0)) / effective) if effective > 0 else 0.0
+            for role in ("stable", "shared", "reserve", "dead", "unknown")
+        }
+        return {
+            "stdp_eligible_samples": float(eligible),
+            "effective_stdp_updates": float(effective),
+            "gated_skipped_stdp_samples": float(gated),
+            "forward_winner_gated_no_update_samples": float(gated),
+            "has_forward_winner_gated_no_update": bool(gated > 0),
+            "forward_winner_gated_no_update_rate": (
+                float(gated / forward_winners) if forward_winners > 0 else 0.0
+            ),
+            "gated_skip_rate": float(gated / eligible) if eligible > 0 else 0.0,
+            "effective_update_rate": float(effective / eligible) if eligible > 0 else 0.0,
+            "updates_by_role": dict(updates_by_role),
+            "role_update_share": role_update_share,
+            "shared_update_share": float(shared_updates / effective) if effective > 0 else 0.0,
+            "reserve_update_share": float(reserve_updates / effective) if effective > 0 else 0.0,
+            "open_pool_update_share": {
+                "shared": float(shared_updates / open_pool_updates) if open_pool_updates > 0 else 0.0,
+                "reserve": float(reserve_updates / open_pool_updates) if open_pool_updates > 0 else 0.0,
+            },
+        }
+
+    def end_epoch(self, epoch_index: int) -> Dict[str, Any]:
+        summary: Dict[str, Any] = {
+            "epoch": int(epoch_index) + 1,
+            **winner_distribution_metrics(self._epoch_winner_counts),
+            "forward_with_winner": float(self._epoch_forward_with_winner),
+            "forward_silent": float(self._epoch_forward_silent),
+            **self._update_share_summary(
+                forward_with_winner=self._epoch_forward_with_winner,
+                stdp_eligible=self._epoch_stdp_eligible,
+                effective_stdp_updates=self._epoch_effective_stdp_updates,
+                gated_skipped_stdp=self._epoch_gated_skipped_stdp,
+                updates_by_role=self._epoch_updates_by_role,
+            ),
+        }
+        self.epoch_history.append(summary)
+        return summary
+
+    def stage_summary(self) -> Dict[str, Any]:
+        distribution = winner_distribution_metrics(self.winner_counts)
+        updates = self._update_share_summary(
+            forward_with_winner=self.forward_with_winner,
+            stdp_eligible=self.stdp_eligible,
+            effective_stdp_updates=self.effective_stdp_updates,
+            gated_skipped_stdp=self.gated_skipped_stdp,
+            updates_by_role=self.updates_by_role,
+        )
+        return {
+            **distribution,
+            "forward_with_winner": float(self.forward_with_winner),
+            "forward_silent": float(self.forward_silent),
+            **updates,
+            "epoch_history": list(self.epoch_history),
+        }
 
 
 @dataclass
@@ -72,6 +265,7 @@ class RoleTrainSchedule:
     partition: NeuronPartition
     stdp_multipliers: Tensor = field(default_factory=lambda: torch.tensor([]))
     stats: Dict[str, float] = field(default_factory=dict)
+    competition: Optional[RoleTrainCompetitionTracker] = None
 
     @property
     def enabled(self) -> bool:
@@ -87,6 +281,7 @@ class RoleTrainSchedule:
         schedule = cls(config=role_config, partition=partition)
         if schedule.enabled:
             schedule.stdp_multipliers = schedule._build_stdp_multipliers(role_config.early)
+            schedule.competition = RoleTrainCompetitionTracker(num_neurons=partition.num_neurons)
         return schedule
 
     def should_apply(self, stage_name: str) -> bool:
@@ -169,6 +364,14 @@ class RoleTrainSchedule:
             return 1.0
         return float(self.stdp_multipliers[winner_idx].item())
 
+    def role_name_for_winner(self, winner_idx: Optional[int]) -> str:
+        if winner_idx is None:
+            return "unknown"
+        try:
+            return str(self.partition.role_name(int(winner_idx)))
+        except (TypeError, ValueError, IndexError):
+            return "unknown"
+
     @contextmanager
     def _temporarily_scaled_learning_rate(self, stdp: Any, multiplier: float):
         old_ap = float(stdp.learning_rate[0][0].item())
@@ -180,17 +383,17 @@ class RoleTrainSchedule:
             stdp.update_all_learning_rate(old_ap, old_an)
 
     @torch.no_grad()
-    def gated_reward(self, model: nn.Module) -> None:
+    def gated_reward(self, model: nn.Module) -> bool:
         if not hasattr(model, "reward"):
             raise ValueError("Model does not expose reward().")
         conv3 = getattr(model, "conv3", None)
         if conv3 is None or not self.enabled:
             model.reward()
-            return
+            return True
         multiplier = self.multiplier_for_winner(model)
         if multiplier == 0.0:
             self.stats["reward_skipped"] = float(self.stats.get("reward_skipped", 0.0) + 1.0)
-            return
+            return False
         stdp = getattr(model, "stdp3", None)
         if stdp is None:
             weight_before = conv3.weight.clone()
@@ -202,19 +405,20 @@ class RoleTrainSchedule:
             with self._temporarily_scaled_learning_rate(stdp, multiplier):
                 model.reward()
         self.stats["reward_calls"] = float(self.stats.get("reward_calls", 0.0) + 1.0)
+        return True
 
     @torch.no_grad()
-    def gated_punish(self, model: nn.Module) -> None:
+    def gated_punish(self, model: nn.Module) -> bool:
         if not hasattr(model, "punish"):
             raise ValueError("Model does not expose punish().")
         conv3 = getattr(model, "conv3", None)
         if conv3 is None or not self.enabled:
             model.punish()
-            return
+            return True
         multiplier = self.multiplier_for_winner(model)
         if multiplier == 0.0:
             self.stats["punish_skipped"] = float(self.stats.get("punish_skipped", 0.0) + 1.0)
-            return
+            return False
         stdp = getattr(model, "anti_stdp3", None)
         if stdp is None:
             weight_before = conv3.weight.clone()
@@ -226,6 +430,7 @@ class RoleTrainSchedule:
             with self._temporarily_scaled_learning_rate(stdp, multiplier):
                 model.punish()
         self.stats["punish_calls"] = float(self.stats.get("punish_calls", 0.0) + 1.0)
+        return True
 
     def summarize(self) -> Dict[str, Any]:
         if not self.enabled:
@@ -245,4 +450,7 @@ class RoleTrainSchedule:
                 for role in ("stable", "shared", "reserve")
             },
             "stats": dict(self.stats),
+            "competition_diagnostics": (
+                self.competition.stage_summary() if self.competition is not None else None
+            ),
         }

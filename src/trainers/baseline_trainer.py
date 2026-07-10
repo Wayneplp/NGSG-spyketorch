@@ -1069,6 +1069,8 @@ class BaselineTrainer:
             print(f"[paper s3] role-train schedule active for stage={stage_name}", flush=True)
         for epoch_idx in range(epochs):
             model.train()
+            if apply_role_train and role_train is not None and role_train.competition is not None:
+                role_train.competition.begin_epoch()
             if apply_role_train and role_train is not None and hasattr(model, "set_s3_wta_allow_mask"):
                 role_train.set_epoch(epoch_idx, epochs)
                 model.set_s3_wta_allow_mask(role_train.wta_allow_mask(epoch_idx, epochs))
@@ -1155,20 +1157,42 @@ class BaselineTrainer:
                         batch_silent += 1
 
                     if update_decision != -1:
+                        stdp_applied = False
                         if update_decision == target:
                             if apply_role_train and role_train is not None:
-                                role_train.gated_reward(model)
+                                stdp_applied = role_train.gated_reward(model)
                             elif apply_sdpm:
                                 sdpm_gate.gated_reward(model)
+                                stdp_applied = True
                             else:
                                 model.reward()
+                                stdp_applied = True
                         else:
                             if apply_role_train and role_train is not None:
-                                role_train.gated_punish(model)
+                                stdp_applied = role_train.gated_punish(model)
                             elif apply_sdpm:
                                 sdpm_gate.gated_punish(model)
+                                stdp_applied = True
                             else:
                                 model.punish()
+                                stdp_applied = True
+                    else:
+                        stdp_applied = False
+
+                    if apply_role_train and role_train is not None and role_train.competition is not None:
+                        multiplier = (
+                            role_train.multiplier_for_winner(model)
+                            if winner_idx is not None
+                            else 0.0
+                        )
+                        role_train.competition.record_sample(
+                            winner_idx=winner_idx,
+                            forward_silent=(decision == -1),
+                            stdp_eligible=(update_decision != -1),
+                            multiplier=multiplier,
+                            update_applied=stdp_applied,
+                            role_name=role_train.role_name_for_winner(winner_idx),
+                        )
                     samples += 1
                     if progress_every > 0 and samples % progress_every == 0:
                         train_acc_proxy = float(correct + batch_correct) / max(samples, 1)
@@ -1220,12 +1244,26 @@ class BaselineTrainer:
             }
             if winner_frequency is not None:
                 epoch_record["winner_frequency"] = winner_frequency
+            competition_summary = None
+            competition_log_text = ""
+            if apply_role_train and role_train is not None and role_train.competition is not None:
+                competition_summary = role_train.competition.end_epoch(epoch_idx)
+                epoch_record["role_train_competition"] = competition_summary
+                competition_log_text = (
+                    f" role_unique={int(competition_summary['unique_winners'])}"
+                    f" top1={competition_summary['top1_winner_share']:.4f}"
+                    f" top5={competition_summary['top5_winner_share']:.4f}"
+                    f" entropy={competition_summary['winner_entropy']:.4f}"
+                    f" gated_skip={int(competition_summary['gated_skipped_stdp_samples'])}"
+                    f" shared_upd={competition_summary['shared_update_share']:.4f}"
+                    f" reserve_upd={competition_summary['reserve_update_share']:.4f}"
+                )
             history.append(epoch_record)
             print(
                 f"[paper s3] epoch {epoch_idx + 1}/{epochs} done "
                 f"samples={samples} acc1={train_acc_proxy:.4f} best_acc1={best_acc1:.4f} "
                 f"correct={correct} wrong={wrong} silent={silent} silent_rate={silent_rate:.4f}"
-                f"{winner_log_text} "
+                f"{winner_log_text}{competition_log_text} "
                 f"epoch_time={self._format_seconds(epoch_seconds)} "
                 f"elapsed={self._format_seconds(elapsed_seconds)} "
                 f"eta={self._format_seconds(remaining_seconds)}",
