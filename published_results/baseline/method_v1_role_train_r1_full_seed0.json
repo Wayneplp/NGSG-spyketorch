@@ -22,5 +22,6 @@
     "forgetting_delta_pp": -42.81,
     "task2_after_task2_delta_pp": -65.98
   },
-  "note": "METHOD v1 R1: role-train on Task2 (WTA mask + STDP lr scaling). Natural WTA eval. Task2 train proxy stuck at 10% (1/200 winner_active)."
+  "note": "INVALID (neg-inf WTA mask bug): Task2 train proxy stuck at 10% with winner_active=1/200. Do not use for paper. Superseded by R1-fixed-zero-mask after probe validation 2026-07-10.",
+  "status": "invalid-neg-inf-mask"
 }

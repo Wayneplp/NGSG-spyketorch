@@ -1,0 +1,39 @@
+{
+  "run_name": "probe_r1_wta_no_stdp_fixed_zero_mask",
+  "source": "server",
+  "validated_at": "2026-07-10",
+  "fix": "paper_mozafari S3 WTA: -inf mask -> zero mask + masked spike",
+  "unit_tests": {
+    "suites": ["tests.test_role_train_competition", "tests.test_paper_mozafari_wta_mask"],
+    "ran": 9,
+    "status": "OK"
+  },
+  "no_stdp_probe_1000_samples": {
+    "r1_unique_winners": 98,
+    "all200_unique_winners": 139,
+    "r1_top1_share": 0.062,
+    "all200_top1_share": 0.052,
+    "r1_allow_mask_sum": 140,
+    "conv3_weight_max_abs_delta": 0.0
+  },
+  "raw_wta_equivalence_probe": {
+    "raw_pot_shape": [15, 200, 4, 4],
+    "all_open_violations": 0,
+    "subset_violations": 0,
+    "subset_checks": 636,
+    "slice_violations": 0,
+    "slice_checks": 1000,
+    "closed_winner_violations": 0,
+    "nonfinite_masked": 0,
+    "illegal_spike": 0,
+    "closed_spike_nonzero": 0,
+    "masked_unique_winners": 98,
+    "masked_top1_share": 0.062,
+    "neuron0_masked_share": 0.021
+  },
+  "verdict": "Official WTA zero-mask restored as legal subset WTA; old neg-inf mask caused neuron-0 100% collapse.",
+  "server_paths": {
+    "probe_report": "experiments/probe_r1_wta_no_stdp_fixed_zero_mask/probe_report.json",
+    "equivalence_report": "experiments/probe_r1_wta_no_stdp_fixed_zero_mask/raw_wta_equivalence_report.json"
+  }
+}

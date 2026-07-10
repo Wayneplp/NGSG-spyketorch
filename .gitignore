@@ -14,6 +14,8 @@ env/
 .idea/
 SERVER_LATEST_STATUS.md
 
+.codex_ssh_askpass.sh
+
 # Experiment artifacts generated locally
 logs/
 checkpoints/

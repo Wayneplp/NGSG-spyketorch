@@ -169,8 +169,7 @@ class PaperMozafariMNIST2018(nn.Module):
             spk_in = sf.pad(sf.pooling(spk, 3, 3), (2, 2, 2, 2))
             pot = self.conv3(spk_in)
             pot = self._apply_s3_potential_boost(pot)
-            pot = self._apply_s3_wta_mask(pot)
-            spk = sf.fire(pot)
+            pot, spk = self._s3_wta_inputs(pot)
             winners = sf.get_k_winners(pot, 1, self.r3, spk)
             self._store_context(spk_in, pot, spk, winners)
             return self._decision_from_winners(winners)
@@ -185,8 +184,7 @@ class PaperMozafariMNIST2018(nn.Module):
             return spk, pot
         pot = self.conv3(sf.pad(sf.pooling(spk, 3, 3), (2, 2, 2, 2)))
         pot = self._apply_s3_potential_boost(pot)
-        pot = self._apply_s3_wta_mask(pot)
-        spk = sf.fire(pot)
+        pot, spk = self._s3_wta_inputs(pot)
         winners = sf.get_k_winners(pot, 1, self.r3, spk)
         return self._decision_from_winners(winners)
 
@@ -219,26 +217,41 @@ class PaperMozafariMNIST2018(nn.Module):
     def clear_s3_wta_allow_mask(self) -> None:
         self.s3_wta_allow_mask = None
 
+    def _s3_wta_inputs(self, pot: Tensor) -> tuple[Tensor, Tensor]:
+        masked_pot = self._apply_s3_wta_mask(pot)
+        spk = sf.fire(masked_pot)
+        masked_spk = self._apply_s3_wta_mask(spk)
+        return masked_pot, masked_spk
+
+    def _s3_wta_mask_feature_axis(self, tensor: Tensor, allow_mask: Tensor) -> int:
+        if tensor.ndim == 3 and int(tensor.shape[0]) == int(allow_mask.numel()):
+            return 0
+        if tensor.ndim == 4:
+            if int(tensor.shape[1]) == int(allow_mask.numel()):
+                return 1
+            if int(tensor.shape[0]) == int(allow_mask.numel()):
+                return 0
+        raise ValueError(
+            f"Invalid S3 WTA allow mask length {int(allow_mask.numel())} "
+            f"for tensor shape {tuple(tensor.shape)}."
+        )
+
     def _apply_s3_wta_mask(self, pot: Tensor) -> Tensor:
         allow_mask = self.s3_wta_allow_mask
         if allow_mask is None or allow_mask.numel() == 0:
             return pot
-        allow_mask = allow_mask.to(device=pot.device)
-        masked = pot.clone()
+        allow_mask = allow_mask.to(device=pot.device, dtype=torch.bool)
+        axis = self._s3_wta_mask_feature_axis(pot, allow_mask)
         closed = ~allow_mask
         if not bool(closed.any()):
             return pot
-        neg_inf = torch.tensor(float("-inf"), device=pot.device, dtype=pot.dtype)
-        if pot.ndim == 3 and int(pot.shape[0]) == int(allow_mask.numel()):
-            masked[closed] = neg_inf
+        masked = pot.clone()
+        if axis == 0:
+            masked[closed] = 0
             return masked
-        if pot.ndim == 4:
-            if int(pot.shape[0]) == int(allow_mask.numel()):
-                masked[closed] = neg_inf
-                return masked
-            if int(pot.shape[1]) == int(allow_mask.numel()):
-                masked[:, closed] = neg_inf
-                return masked
+        if axis == 1:
+            masked[:, closed] = 0
+            return masked
         return pot
 
     def _apply_s3_potential_boost(self, pot: Tensor) -> Tensor:
@@ -300,8 +313,7 @@ class PaperMozafariMNIST2018(nn.Module):
         s3_input = s3_input.float().to(next(self.parameters()).device)
         pot = self.conv3(s3_input)
         pot = self._apply_s3_potential_boost(pot)
-        pot = self._apply_s3_wta_mask(pot)
-        spk = sf.fire(pot)
+        pot, spk = self._s3_wta_inputs(pot)
         winners = sf.get_k_winners(pot, 1, self.r3, spk)
         self._store_context(s3_input, pot, spk, winners)
         return self._decision_from_winners(winners)
