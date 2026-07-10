@@ -1,0 +1,25 @@
+{
+  "run_name": "method_v1_role_train_r1_full_seed0",
+  "source": "server",
+  "checkpoint_stage": "task2",
+  "eval_config": "configs/ngsg/method_v1_role_routing_r2_full_seed0.yaml",
+  "completed_at": "2026-07-09 23:05",
+  "method_v1_routing": {
+    "task1_mnist_accuracy": 0.8749,
+    "task2_emnist_accuracy": 0.114,
+    "avg_acc_class": 0.49445,
+    "avg_acc_task": 0.5,
+    "route_kind_counts": {
+      "task1": {"uncertain": 10000},
+      "task2": {"uncertain": 8000}
+    },
+    "route_reason": "uncertain_default_task1 (all samples)"
+  },
+  "natural_wta_baseline": {
+    "task1_mnist_accuracy": 0.9033,
+    "task2_emnist_accuracy": 0.0945,
+    "avg_accuracy": 0.4989
+  },
+  "task_memory_loaded": false,
+  "note": "R2 routing eval on R1 checkpoint (no retrain). Routing did not activate — all samples routed as uncertain."
+}

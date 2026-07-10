@@ -14,9 +14,17 @@ from SpykeTorch import snn
 
 from src.analysis.metrics import summarize_continual_metrics
 from src.continual import NeuronPartition, ReserveActivation, SDPMGate
+from src.continual.role_aware_inference import (
+    MethodV1RoutingConfig,
+    predict_with_method_v1_routing,
+    summarize_routing_config,
+)
+from src.continual.role_train import RoleTrainSchedule
+from src.continual.task_memory import TaskMemory
 from src.plasticity import SpykeTorchRSTDPConfig, SpykeTorchRewardSTDP
 from src.utils.data import (
     ConcatenatedSubset,
+    InMemoryTensorBatchLoader,
     TaskBundle,
     _describe_dataset_for_cache,
     _hash_jsonable,
@@ -82,6 +90,8 @@ class BaselineTrainer:
             sdpm_gate=sdpm_gate,
         )
         neuron_partition = self.fit_neuron_partition_after_task1(model, config, task1_training_stats)
+        role_train = self.build_role_train_schedule(config, neuron_partition)
+        task_memory = self.build_task_memory(model, config)
         sdpm_gate = self.fit_sdpm_gate_after_task1(
             model,
             config,
@@ -100,8 +110,33 @@ class BaselineTrainer:
                     f"sigma={reserve_activation.stats.get('weight_transfer_noise_sigma', 0):.3f}",
                     flush=True,
                 )
+                if sdpm_gate is not None and sdpm_gate.enabled and sdpm_gate.config.refresh_after_weight_transfer:
+                    sdpm_gate = sdpm_gate.refresh_after_weight_transfer(
+                        model,
+                        reserve_activation.weight_transfer_pairs(),
+                    )
+                    summary = sdpm_gate.summarize()
+                    drift_stats = summary.get("drift_stats", {})
+                    print(
+                        "[sdpm gate] refreshed after weight transfer: "
+                        f"pairs={drift_stats.get('transfer_pairs', 0.0):.0f} "
+                        f"inherited={drift_stats.get('inherited_transfer_occupancy', 0.0):.0f} "
+                        f"protected_fraction={summary.get('protected_fraction', 0.0):.4f} "
+                        f"gate_mean={summary.get('gate_mean', 0.0):.4f}",
+                        flush=True,
+                    )
         if neuron_partition is not None and neuron_partition.enabled:
             task1_training_stats["neuron_partition"] = neuron_partition.to_dict(include_arrays=True)
+
+        if task_memory is not None and task_memory.enabled:
+            task_memory_stats = self.fit_task_memory_from_loader(
+                model,
+                train_task1_loader,
+                device,
+                task_memory,
+                task_index=0,
+            )
+            task1_training_stats["task_memory"] = task_memory_stats
 
         self._maybe_save_task1_model(model, config)
 
@@ -128,7 +163,15 @@ class BaselineTrainer:
                 },
             )
 
-        task1_after_task1 = self.evaluate(model, test_task1_loader, device)
+        task1_after_task1 = self.evaluate(
+            model,
+            test_task1_loader,
+            device,
+            config=config,
+            partition=neuron_partition,
+            task_memory=task_memory,
+            routing_active=False,
+        )
         task2_training_stats = self.train_single_task(
             model=model,
             dataloader=train_task2_loader,
@@ -138,10 +181,37 @@ class BaselineTrainer:
             stage_name="task2",
             sdpm_gate=sdpm_gate,
             reserve_activation=reserve_activation,
+            role_train=role_train,
         )
 
-        task1_after_task2 = self.evaluate(model, test_task1_loader, device)
-        task2_after_task2 = self.evaluate(model, test_task2_loader, device)
+        if task_memory is not None and task_memory.enabled:
+            task_memory_stats = self.fit_task_memory_from_loader(
+                model,
+                train_task2_loader,
+                device,
+                task_memory,
+                task_index=1,
+            )
+            task2_training_stats["task_memory"] = task_memory_stats
+
+        task1_after_task2 = self.evaluate(
+            model,
+            test_task1_loader,
+            device,
+            config=config,
+            partition=neuron_partition,
+            task_memory=task_memory,
+            routing_active=True,
+        )
+        task2_after_task2 = self.evaluate(
+            model,
+            test_task2_loader,
+            device,
+            config=config,
+            partition=neuron_partition,
+            task_memory=task_memory,
+            routing_active=True,
+        )
         metrics = summarize_continual_metrics(
             task1_after_task1=task1_after_task1,
             task1_after_task2=task1_after_task2,
@@ -182,6 +252,21 @@ class BaselineTrainer:
             extra["neuron_partition"] = neuron_partition.summarize()
         if reserve_activation is not None and reserve_activation.enabled:
             extra["reserve_activation"] = reserve_activation.summarize()
+        if role_train is not None and role_train.enabled:
+            extra["role_train"] = role_train.summarize()
+        if task_memory is not None and task_memory.enabled:
+            extra["task_memory"] = task_memory.to_dict()
+        routing_summary = self.summarize_method_v1_routing_eval(
+            model,
+            test_task1_loader,
+            test_task2_loader,
+            device,
+            config=config,
+            partition=neuron_partition,
+            task_memory=task_memory,
+        )
+        if routing_summary is not None:
+            extra["method_v1_routing_eval"] = routing_summary
         if test_winner_roles is not None:
             extra["test_winner_roles"] = test_winner_roles
 
@@ -404,6 +489,71 @@ class BaselineTrainer:
         )
         return fitted
 
+    def build_role_train_schedule(
+        self,
+        config: Mapping[str, Any],
+        neuron_partition: Optional[NeuronPartition],
+    ) -> Optional[RoleTrainSchedule]:
+        continual_cfg = config.get("continual", {})
+        role_cfg = continual_cfg.get("role_train", {})
+        if not bool(role_cfg.get("enabled", False)):
+            return None
+        if neuron_partition is None or not neuron_partition.enabled:
+            raise ValueError(
+                "role_train is enabled but neuron_partition is missing or disabled. "
+                "Enable continual.neuron_partition when using role-aware training."
+            )
+        schedule = RoleTrainSchedule.from_config(continual_cfg, neuron_partition)
+        if schedule.enabled:
+            summary = schedule.summarize()
+            print(
+                "[role train] schedule ready for "
+                f"{summary.get('apply_stages', [])}: "
+                f"early shared_lr={summary.get('early', {}).get('shared_stdp_lr', 0.0)} "
+                f"reserve_lr={summary.get('early', {}).get('reserve_stdp_lr', 0.0)}",
+                flush=True,
+            )
+        return schedule
+
+    def build_task_memory(self, model: nn.Module, config: Mapping[str, Any]) -> Optional[TaskMemory]:
+        memory_cfg = config.get("continual", {}).get("task_memory", {})
+        if not bool(memory_cfg.get("enabled", False)):
+            return None
+        num_neurons = int(getattr(getattr(model, "config", None), "s3_neurons", len(getattr(model, "decision_map", []))))
+        return TaskMemory.from_mapping(memory_cfg, num_neurons=num_neurons, num_tasks=2)
+
+    def fit_task_memory_from_loader(
+        self,
+        model: nn.Module,
+        dataloader: Any,
+        device: torch.device,
+        task_memory: TaskMemory,
+        *,
+        task_index: int,
+        max_samples: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        if task_memory is None or not task_memory.enabled:
+            return {"enabled": False}
+        updated = 0
+        for inputs, _ in dataloader:
+            inputs, _ = move_batch_to_device((inputs, _), device)
+            for sample_idx in range(int(inputs.shape[0])):
+                task_memory.update_from_model_sample(model, inputs[sample_idx], task_index)
+                updated += 1
+                if max_samples is not None and updated >= max_samples:
+                    break
+            if max_samples is not None and updated >= max_samples:
+                break
+        summary = task_memory.summarize()
+        summary["fitted_samples"] = int(updated)
+        summary["task_index"] = int(task_index)
+        print(
+            f"[task memory] fitted task_index={task_index} samples={updated} "
+            f"prototype_separation_cos={summary.get('prototype_separation_cos', 0.0):.4f}",
+            flush=True,
+        )
+        return summary
+
     def fit_reserve_activation_after_task1(
         self,
         model: nn.Module,
@@ -447,6 +597,7 @@ class BaselineTrainer:
         stage_name: str,
         sdpm_gate: Optional[SDPMGate] = None,
         reserve_activation: Optional[ReserveActivation] = None,
+        role_train: Optional[RoleTrainSchedule] = None,
     ) -> Dict[str, Any]:
         train_cfg = config.get("train", {})
         learning_rule = str(train_cfg.get("learning_rule", "spyketorch_stdp_rstdp")).lower()
@@ -465,6 +616,7 @@ class BaselineTrainer:
                 stage_name,
                 sdpm_gate=sdpm_gate,
                 reserve_activation=reserve_activation,
+                role_train=role_train,
             )
 
         s1_epochs = self._stage_epochs(config, stage_name, "s1_stdp_epochs", 0)
@@ -610,8 +762,6 @@ class BaselineTrainer:
                 continue
             if int(candidate_meta.get("s2_epochs", -1)) != int(s2_epochs):
                 continue
-            if int(candidate_meta.get("seed", expected_seed)) != expected_seed:
-                continue
             if dict(candidate_meta.get("model", {})) != expected_model:
                 continue
             return candidate
@@ -631,6 +781,8 @@ class BaselineTrainer:
         enabled = bool(checkpoint_cfg.get("enabled", False))
         if not enabled or not bool(checkpoint_cfg.get("save", True)) or (s1_epochs <= 0 and s2_epochs <= 0):
             return {"enabled": enabled, "saved": False}
+        if checkpoint_info and not checkpoint_info.get("loaded"):
+            return {"enabled": enabled, "saved": False, "skipped": "not_loaded_from_checkpoint"}
         if checkpoint_info and checkpoint_info.get("path"):
             checkpoint_path = Path(str(checkpoint_info["path"]))
             metadata = dict(checkpoint_info.get("metadata", {}))
@@ -699,11 +851,31 @@ class BaselineTrainer:
         if cache_preload and cached_num_workers > 0:
             print("[paper c2-cache] preload=true; forcing num_workers=0 to avoid duplicating the RAM cache", flush=True)
             cached_num_workers = 0
+        cached_shuffle = bool(cache_cfg.get("shuffle", train_cfg.get("shuffle", True)))
+        if cache_preload and cached_dataset.is_tensor_preloaded and bool(cache_cfg.get("direct_loader", True)):
+            cached_loader = InMemoryTensorBatchLoader(
+                dataset=cached_dataset,
+                batch_size=cached_batch_size,
+                shuffle=cached_shuffle,
+                seed=int(config.get("seed", 0)),
+            )
+            print(f"[paper c2-cache] using in-memory tensor loader: {cached_dataset.cache_dir}", flush=True)
+            return cached_loader, {
+                "enabled": True,
+                "feature_kind": "paper_s3_input",
+                "cache_dir": str(cached_dataset.cache_dir),
+                "batch_size": cached_batch_size,
+                "num_workers": 0,
+                "pin_memory": bool(cache_cfg.get("pin_memory", train_cfg.get("pin_memory", torch.cuda.is_available()))),
+                "preload": cache_preload,
+                "direct_loader": True,
+                "metadata": metadata,
+            }
         prefetch_factor = cache_cfg.get("prefetch_factor", train_cfg.get("prefetch_factor"))
         cached_loader = build_dataloader(
             dataset=cached_dataset,
             batch_size=cached_batch_size,
-            shuffle=bool(cache_cfg.get("shuffle", train_cfg.get("shuffle", True))),
+            shuffle=cached_shuffle,
             num_workers=cached_num_workers,
             pin_memory=bool(cache_cfg.get("pin_memory", train_cfg.get("pin_memory", torch.cuda.is_available()))),
             persistent_workers=bool(cache_cfg.get("persistent_workers", train_cfg.get("persistent_workers", False))),
@@ -733,6 +905,7 @@ class BaselineTrainer:
         stage_name: str,
         sdpm_gate: Optional[SDPMGate] = None,
         reserve_activation: Optional[ReserveActivation] = None,
+        role_train: Optional[RoleTrainSchedule] = None,
     ) -> Dict[str, Any]:
         train_cfg = config.get("train", {})
         if bool(train_cfg.get("reset_learning_rates_each_stage", True)) and hasattr(model, "reset_learning_rates"):
@@ -800,6 +973,7 @@ class BaselineTrainer:
             sdpm_gate=sdpm_gate,
             config=config,
             reserve_activation=reserve_activation,
+            role_train=role_train,
         )
         return stats
     def train_paper_unsupervised(
@@ -853,6 +1027,7 @@ class BaselineTrainer:
         sdpm_gate: Optional[SDPMGate] = None,
         config: Optional[Mapping[str, Any]] = None,
         reserve_activation: Optional[ReserveActivation] = None,
+        role_train: Optional[RoleTrainSchedule] = None,
     ) -> Dict[str, Any]:
         adaptive_int = float(train_cfg.get("paper_adaptive_int", 0.5))
         adaptive_min = float(train_cfg.get("paper_adaptive_min", 0.0))
@@ -862,9 +1037,13 @@ class BaselineTrainer:
         sdpm_enabled = bool((config or {}).get("continual", {}).get("sdpm_gate", {}).get("enabled", False))
         partition_enabled = bool((config or {}).get("continual", {}).get("neuron_partition", {}).get("enabled", False))
         reserve_enabled = bool((config or {}).get("continual", {}).get("reserve_activation", {}).get("enabled", False))
-        track_winner_counts = winner_log_enabled or sdpm_enabled or partition_enabled or reserve_enabled
+        role_train_enabled = bool((config or {}).get("continual", {}).get("role_train", {}).get("enabled", False))
+        track_winner_counts = (
+            winner_log_enabled or sdpm_enabled or partition_enabled or reserve_enabled or role_train_enabled
+        )
         apply_sdpm = sdpm_gate is not None and sdpm_gate.should_apply(stage_name)
         apply_reserve = reserve_activation is not None and reserve_activation.should_apply(stage_name)
+        apply_role_train = role_train is not None and role_train.should_apply(stage_name)
         winner_log_top_k = int(winner_log_cfg.get("top_k", 10))
         winner_log_include_counts = bool(winner_log_cfg.get("include_counts", True))
         num_s3_neurons = int(getattr(getattr(model, "config", None), "s3_neurons", len(getattr(model, "decision_map", []))))
@@ -886,8 +1065,15 @@ class BaselineTrainer:
             print(f"[paper s3] reserve activation active for stage={stage_name}", flush=True)
             if reserve_activation is not None and reserve_activation.uses_homeostatic_boost():
                 print(f"[paper s3] reserve homeostatic boost active for stage={stage_name}", flush=True)
+        if apply_role_train:
+            print(f"[paper s3] role-train schedule active for stage={stage_name}", flush=True)
         for epoch_idx in range(epochs):
             model.train()
+            if apply_role_train and role_train is not None and hasattr(model, "set_s3_wta_allow_mask"):
+                role_train.set_epoch(epoch_idx, epochs)
+                model.set_s3_wta_allow_mask(role_train.wta_allow_mask(epoch_idx, epochs))
+            elif hasattr(model, "clear_s3_wta_allow_mask"):
+                model.clear_s3_wta_allow_mask()
             if apply_reserve and reserve_activation is not None and reserve_activation.uses_homeostatic_boost():
                 boost = reserve_activation.homeostatic_boost_vector(
                     num_neurons=num_s3_neurons,
@@ -914,7 +1100,11 @@ class BaselineTrainer:
             winner_log_samples = 0
             epoch_start = time.time()
             for batch in dataloader:
-                inputs, targets = move_batch_to_device(batch, device)
+                inputs, targets = batch
+                if isinstance(inputs, torch.Tensor):
+                    inputs = inputs.to(device, non_blocking=device.type == "cuda")
+                elif hasattr(inputs, "to"):
+                    inputs = inputs.to(device)
                 batch_correct = 0
                 batch_wrong = 0
                 batch_silent = 0
@@ -924,7 +1114,7 @@ class BaselineTrainer:
                         decision = int(model.forward_from_s3_input(inputs[sample_idx]))
                     else:
                         decision = int(model(inputs[sample_idx], 3))
-                    target = int(targets[sample_idx].item())
+                    target = int(targets[sample_idx])
                     winner_idx = self._first_winner_index(model) if track_winner_counts or apply_reserve else None
                     if track_winner_counts:
                         if winner_idx is not None:
@@ -966,12 +1156,16 @@ class BaselineTrainer:
 
                     if update_decision != -1:
                         if update_decision == target:
-                            if apply_sdpm:
+                            if apply_role_train and role_train is not None:
+                                role_train.gated_reward(model)
+                            elif apply_sdpm:
                                 sdpm_gate.gated_reward(model)
                             else:
                                 model.reward()
                         else:
-                            if apply_sdpm:
+                            if apply_role_train and role_train is not None:
+                                role_train.gated_punish(model)
+                            elif apply_sdpm:
                                 sdpm_gate.gated_punish(model)
                             else:
                                 model.punish()
@@ -1039,6 +1233,8 @@ class BaselineTrainer:
             )
         if hasattr(model, "clear_s3_potential_boost"):
             model.clear_s3_potential_boost()
+        if hasattr(model, "clear_s3_wta_allow_mask"):
+            model.clear_s3_wta_allow_mask()
         output_stats: Dict[str, Any] = {
             "stage": "s3",
             "epochs": epochs,
@@ -1053,6 +1249,8 @@ class BaselineTrainer:
             output_stats["sdpm_gate"] = sdpm_gate.summarize()
         if apply_reserve and reserve_activation is not None:
             output_stats["reserve_activation"] = reserve_activation.summarize()
+        if apply_role_train and role_train is not None:
+            output_stats["role_train"] = role_train.summarize()
         return output_stats
 
     def _first_winner_index(self, model: nn.Module) -> Optional[int]:
@@ -1325,14 +1523,122 @@ class BaselineTrainer:
                 yield inputs[sample_idx], targets[sample_idx]
 
     @torch.no_grad()
-    def evaluate(self, model: nn.Module, dataloader: Any, device: torch.device) -> float:
+    def evaluate(
+        self,
+        model: nn.Module,
+        dataloader: Any,
+        device: torch.device,
+        *,
+        config: Optional[Mapping[str, Any]] = None,
+        partition: Optional[NeuronPartition] = None,
+        task_memory: Optional[TaskMemory] = None,
+        eval_task_index: Optional[int] = None,
+        routing_active: bool = True,
+    ) -> float:
+        routing = MethodV1RoutingConfig.from_eval_config((config or {}).get("eval", {}))
+        use_routing = (
+            routing_active
+            and routing.enabled
+            and partition is not None
+            and partition.enabled
+            and hasattr(model, "forward_s3_potentials")
+        )
         correct = 0
         total = 0
         for image, target in self.iter_samples(dataloader, device):
-            prediction = model.predict_single(image)
+            if use_routing:
+                prediction, _ = predict_with_method_v1_routing(
+                    model,
+                    image,
+                    partition,
+                    task_memory,
+                    routing,
+                    eval_task_index=eval_task_index,
+                )
+            else:
+                prediction = int(model.predict_single(image))
             correct += int(prediction == int(target.item()))
             total += 1
         return float(correct / max(total, 1))
+
+    @torch.no_grad()
+    def summarize_method_v1_routing_eval(
+        self,
+        model: nn.Module,
+        test_task1_loader: Any,
+        test_task2_loader: Any,
+        device: torch.device,
+        *,
+        config: Mapping[str, Any],
+        partition: Optional[NeuronPartition],
+        task_memory: Optional[TaskMemory],
+    ) -> Optional[Dict[str, Any]]:
+        routing = MethodV1RoutingConfig.from_eval_config(config.get("eval", {}))
+        if not routing.enabled or partition is None or not partition.enabled:
+            return None
+        if not hasattr(model, "forward_s3_potentials"):
+            return None
+
+        def _eval_loader(dataloader: Any, *, expected_task_index: int, stage_label: str) -> Dict[str, Any]:
+            correct = 0
+            silent = 0
+            total = 0
+            task_correct = 0
+            route_counts: Dict[str, int] = {}
+            reason_counts: Dict[str, int] = {}
+            conf_stable_sum = 0.0
+            conf_reserve_sum = 0.0
+            for image, target in self.iter_samples(dataloader, device):
+                prediction, details = predict_with_method_v1_routing(
+                    model,
+                    image,
+                    partition,
+                    task_memory,
+                    routing,
+                )
+                target_int = int(target.item())
+                total += 1
+                if prediction == -1:
+                    silent += 1
+                elif prediction == target_int:
+                    correct += 1
+                task_hat = int(details.get("task_hat", 0))
+                if task_hat == expected_task_index:
+                    task_correct += 1
+                route_kind = str(details.get("route_kind", "unknown"))
+                route_counts[route_kind] = route_counts.get(route_kind, 0) + 1
+                reason = str(details.get("route_reason", "unknown"))
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+                confidences = details.get("confidences", {})
+                conf_stable_sum += float(confidences.get("stable", 0.0))
+                conf_reserve_sum += float(confidences.get("reserve", 0.0))
+            denom = max(total, 1)
+            return {
+                "stage": stage_label,
+                "expected_task_index": int(expected_task_index),
+                "accuracy": float(correct / denom),
+                "silent_rate": float(silent / denom),
+                "acc_task": float(task_correct / denom),
+                "route_kind_counts": route_counts,
+                "route_reason_counts": reason_counts,
+                "mean_conf_stable": float(conf_stable_sum / denom),
+                "mean_conf_reserve": float(conf_reserve_sum / denom),
+                "samples": int(total),
+            }
+
+        task1_summary = _eval_loader(test_task1_loader, expected_task_index=0, stage_label="task1_test_after_task2")
+        task2_summary = _eval_loader(test_task2_loader, expected_task_index=1, stage_label="task2_test_after_task2")
+        return {
+            "routing": summarize_routing_config(routing),
+            "task1": task1_summary,
+            "task2": task2_summary,
+            "avg_acc_class": float(
+                (task1_summary["accuracy"] + task2_summary["accuracy"]) / 2.0
+            ),
+            "avg_acc_task": float(
+                (task1_summary["acc_task"] + task2_summary["acc_task"]) / 2.0
+            ),
+        }
 
     @torch.no_grad()
     def evaluate_winner_role_distribution(

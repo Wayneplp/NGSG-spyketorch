@@ -1,9 +1,9 @@
-# Medium-scale reserve weight-transfer ablation (sigma=0.02).
-# Before Task2, reserve neurons inherit stable-neuron conv3 weights + Gaussian noise.
-# Normal WTA; no reroute, no boost, no SDPM.
+# METHOD v1 R2 eval config: routing parameters only.
+# Training is identical to R1 — use R1 checkpoint + eval_method_v1_routing.py.
+# Do NOT run full training with this config unless you explicitly need a retrain ablation.
 method: catastrophic
 seed: 0
-run_name: null
+run_name: method_v1_role_routing_r2_full_seed0
 
 data:
   dataset_name: paper_mnist_emnist
@@ -15,6 +15,7 @@ data:
   subset_seed: 0
   preprocess_cache: true
   preprocess_cache_root: data/preprocessed/paper_source
+
 tasks:
   task_specs:
     - name: initial_mnist_digits
@@ -24,8 +25,7 @@ tasks:
         normalize: false
       labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
       mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-      train_samples_per_label: 100
-      test_samples_per_label: 100
+      train_samples_per_label: 2400
     - name: subsequent_emnist_capitals_ABDEGHNQRS
       dataset:
         dataset_name: emnist
@@ -35,8 +35,7 @@ tasks:
         fix_orientation: true
       labels: [1, 2, 4, 5, 7, 8, 14, 17, 18, 19]
       mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-      train_samples_per_label: 100
-      test_samples_per_label: 100
+      train_samples_per_label: 2400
   task_order: [0, 1]
 
 model:
@@ -63,8 +62,6 @@ model:
   local_normalization_radius: 8
 
 continual:
-  sdpm_gate:
-    enabled: false
   neuron_partition:
     enabled: true
     f_stable_percentile: 0.70
@@ -72,29 +69,46 @@ continual:
     q_stable_min: 0.60
     importance:
       use_weight_strength: true
-  reserve_activation:
+  role_train:
     enabled: true
     apply_stages: [task2]
-    novelty_threshold: 0.15
-    use_class_local: true
-    recruit_roles: [reserve]
-    random_recruitment: false
-    reroute_updates: false
-    homeostatic_boost: false
-    weight_transfer: true
-    weight_transfer_source_roles: [stable]
-    weight_transfer_target_roles: [reserve]
-    weight_transfer_noise_sigma: 0.02
-    weight_transfer_class_local: true
+    early_epoch_fraction: 0.8
+    early:
+      stable:
+        wta_open: false
+        stdp_lr: 0.0
+      shared:
+        wta_open: true
+        stdp_lr: 0.2
+      reserve:
+        wta_open: true
+        stdp_lr: 1.0
+    late:
+      stable:
+        wta_open: false
+        stdp_lr: 0.0
+      shared:
+        wta_open: true
+        stdp_lr: 0.1
+      reserve:
+        wta_open: true
+        stdp_lr: 0.5
+  task_memory:
+    enabled: true
+    eta: 0.1
+  sdpm_gate:
+    enabled: false
+  reserve_activation:
+    enabled: false
 
 train:
-  batch_size: 1000
-  s3_cached_batch_size: 256
+  batch_size: 24000
+  s3_cached_batch_size: 1024
   num_workers: 0
   pin_memory: true
   learning_rule: paper_source_rstdp
-  num_epochs_task1: 50
-  num_epochs_task2: 10
+  num_epochs_task1: 600
+  num_epochs_task2: 100
   s1_stdp_epochs_task1: 2
   s2_stdp_epochs_task1: 4
   s1_stdp_epochs_task2: 2
@@ -102,7 +116,7 @@ train:
   paper_adaptive_int: 0.5
   paper_adaptive_min: 0.0
   reset_learning_rates_each_stage: true
-  progress_interval_samples: 1000
+  progress_interval_samples: 2400
   winner_frequency_log:
     enabled: true
     top_k: 10
@@ -117,13 +131,31 @@ train:
   c2_feature_cache:
     enabled: true
     root_dir: data/features/c2
-    batch_size: 256
+    batch_size: 1024
     preload: true
     preload_pin_memory: false
     pin_memory: true
     num_workers: 0
 
 eval:
+  routing: method_v1
+  method_v1:
+    confidence_tau: 0.05
+    confidence_eps: 1.0e-8
+    gate_open_threshold: 0.5
+    prototype_conflict_tau: 0.15
+    task1_gates:
+      stable: 1.0
+      shared: 0.0
+      reserve: 0.0
+    task2_gates:
+      stable: 0.0
+      shared: 0.6
+      reserve: 1.0
+    uncertain_gates:
+      stable: 0.7
+      shared: 0.5
+      reserve: 0.3
   batch_size: 1000
   pin_memory: true
   measure_forgetting: true
@@ -135,5 +167,5 @@ eval:
 
 output:
   root_dir: experiments
-  summary_csv: results/baseline_summary.csv
+  summary_csv: results/method_v1_summary.csv
   save_task2_model: true

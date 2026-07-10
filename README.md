@@ -1,6 +1,6 @@
 # NGSG SpykeTorch 项目手册
 
-最后更新：2026-07-09（**主线：方案 B + HTM；R0 full + P1/R3 medium/full 已记录**）
+最后更新：2026-07-09（**主线：方案 B + HTM；证据链仅 full scale**）
 
 这个仓库只保留三个主要 Markdown 入口：
 
@@ -158,11 +158,11 @@ SDPM 可作为突触级 λ 的一种实现（§0，**辅助对照**）。HTM 只
 
 | 优先级 | 实验 | 状态 | 目的 |
 | ---: | --- | --- | --- |
-| **P1** | Task2 checkpoint，**EMNIST + mask-stable** | ✅ medium | 验证「屏蔽 stable 能否救 Task2」— **+2.50 pp**（§0.0.1） |
+| **P1** | Task2 checkpoint，**EMNIST + mask-stable** | ✅ full | full 上 mask-stable **-3.86 pp**（§0.0.1）；**不能**从 medium 外推 |
 | **P2** | **Acc_task**：`m_1,m_2` 分离度（可先 static mean，再接 HTM） | ⬜ | 任务记忆可辨识度 |
 | **P3** | **Role-train** vs R0（full，≥3 seed） | ⬜ | 公平主表 R1 |
 | **P4** | **HTM + Role-routing** 端到端（R2） | ⬜ | Acc_task + Acc_class |
-| **P5** | Oracle routing（R3） | ✅ medium + **full** | medium avg +7.80 pp；full avg +8.46 pp（§0.0.2–3） |
+| **P5** | Oracle routing（R3） | ✅ **full** | full avg **+8.46 pp**（§0.0.1）；诊断上界，非保护成功 |
 | **P6** | R4 static prototype vs R2 HTM | ⬜ | 证明「内部记忆模块」非多余包装 |
 | A | Tier A 现象（§0.0） | ✅ | Step 1 动机 |
 
@@ -185,143 +185,90 @@ SDPM 可作为突触级 λ 的一种实现（§0，**辅助对照**）。HTM 只
 ### 不能 claim（截至当前证据）
 
 - HTM **自动** task inference + routing **已验证**端到端提升 Acc_class（P4 未跑）
-- Oracle **已跑**（medium + full）：见 §0.0.2–3；**不等于 Task1 已保护**（主表仍 ~47%）
+- Oracle **已跑**（full）：见 §0.0.1；**不等于 Task1 已保护**（主表仍 ~47%）
 - SDPM alone 为核心创新或全面 SOTA
 - reserve / Phased / full NGSG 有效
 - Class-IL 混合测试集结果
 - 「海马体」生物同源性（仅 **inspired by**，非神经科学 claim）
 
 ---
-## 0.0 WTA 分区组诊断 + P0 反事实（medium seed0，服务器 2026-07-06）— **PASS**
 
-**Run：** partition_group_diagnosis_medium_seed0 · **服务器 commit：** 3f97631  
-**协议：** medium Task1 结束后（未训 Task2）；100/class，S3 50 epoch · **分区：** stable **61** / shared **59** / reserve **80** / dead **0**  
-**产物：** 服务器 diagnostics/partition_counterfactuals.json；git published_results/diagnostics/partition_counterfactuals_medium_seed0.json  
-**本机镜像（不进 git）：** experiments/server_partition_group_diagnosis_medium_seed0/
+## 实验规模政策（2026-07-09）
 
-### 6.1 Group-only（只用某一组神经元推理 Task1）
+**已删除** 所有 medium 规模 YAML（`configs/**/*medium*`）与 `published_results/diagnostics/*medium*.json`。
 
-| 条件 | 用哪些神经元 | Task1 准确率 | vs 200 全用 |
-| --- | ---: | ---: | ---: |
-| **all-200（baseline）** | 200 | **77.50%** | — |
-| **stable-only** | 61 | **77.50%** | **0.00 pp** |
-| shared-only | 59 | 20.30% | -57.20 pp |
-| reserve-only | 80 | 7.30% | -70.20 pp |
+**原因：** medium（100/class，S3 50 epoch）上的组诊断、P0 反事实、reserve 消融等与 full（2400/class，600 epoch）**系统性不一致**，不能外推。典型反例：
 
-测试时 natural WTA 的 winner：**98.4%** 来自 stable，shared **0.8%**，reserve **0.8%**。
-
-### 6.2 Group-masked（屏蔽某一组再推理 Task1）
-
-| 条件 | 屏蔽谁 | Task1 准确率 | vs 200 全用 |
-| --- | ---: | ---: | ---: |
-| **mask-reserve** | reserve（80） | **77.40%** | **-0.10 pp** |
-| mask-shared | shared（59） | 77.40% | -0.10 pp |
-| **mask-stable** | stable（61） | **19.30%** | **-58.20 pp** |
-
-embedded trainer.evaluate Task1 acc：**77.2%**。
-
-### P0 反事实对照（10 seeds，k=61）
-
-| 对照 | Task1 准确率 | vs WTA | 判据 |
-| --- | ---: | ---: | --- |
-| random stable-only | **52.06% ± 6.09 pp** | -25.4 pp vs WTA stable-only | **PASS** |
-| random mask-stable | **70.19% ± 2.94 pp** | vs mask WTA stable 19.30% | **PASS** |
-| shuffled winner-history stable-only | 64.30% / 49.30% / 55.90% | 不再 ≈ all | **PASS** |
-| frequency-only stable-only | 77.50%（= WTA） | — | **NARROW** |
-
-**Caveat：** dead=0，matched-active random 与普通 random 相同。
-
-### 结论
-
-1. **Task1 几乎全靠 stable** — 61 个 stable = 200 个全用（77.5%）。
-2. **reserve / shared 对 Task1 自然推理几乎无贡献** — mask-reserve / mask-shared 各 -0.1 pp；reserve-only ≈ 7.3%。
-3. **stable 是 Task1 推理必要条件** — mask-stable → 19.3%。
-4. **非随机、非任意 mask** — random 61 仅 52%；random mask 70%；只有 mask **WTA stable** 才崩。
-5. **工程含义（方案 B + HTM）** — stable 承载 Task1；reserve 承载 Task2；推理须 **按 task 路由神经元组**。**P1 已验证**：EMNIST 上 mask-stable（= shared∪reserve）**+2.50 pp**（§0.0.1）。
-
-**仍缺：** P0-3 seed 1/2、**P0-4 full Task1**（主文硬门槛）。详见 实验列表.md。
-
-## 0.0.1 Tier A′ — Task2/EMNIST 组诊断（P1，2026-07-08）✅
-
-**协议：** `readout_ablation_medium_seed0` 的 `model_after_task2.pt`；partition 来自 Task1 后 `f_i`（stable 61 / shared 63 / reserve 76）；**EMNIST 测试集**（1000 样本）；只改推理 group-only / group-masked，不改权重。
-
-**结果文件：** `experiments/readout_ablation_medium_seed0/diagnostics/p1_task2_emnist_group_diagnosis.json`
-
-### 6.1 Group-only（Task2/EMNIST）
-
-| 条件 | 神经元数 | EMNIST Acc | vs all-200 |
-| --- | ---: | ---: | ---: |
-| **all-200（baseline）** | 200 | **54.30%** | — |
-| stable-only | 61 | 12.00% | -42.30 pp |
-| shared-only | 63 | 28.10% | -26.20 pp |
-| **reserve-only** | 76 | **53.40%** | **-0.90 pp** |
-
-测试时 natural WTA 的 winner：**reserve 64.8%**，shared **23.2%**，stable **12.0%**。
-
-### 6.2 Group-masked（屏蔽某一组再推理 Task2）
-
-| 条件 | 屏蔽谁 | EMNIST Acc | vs all-200 |
-| --- | ---: | ---: | ---: |
-| **mask-stable** | stable（61） | **56.80%** | **+2.50 pp** |
-| mask-shared | shared（63） | 49.40% | -4.90 pp |
-| **mask-reserve** | reserve（76） | **28.60%** | **-25.70 pp** |
-
-embedded Task1 acc（同 checkpoint）：**77.9%**。
-
-### 与 §0.0（Task1/MNIST）的对称关系
-
-| 维度 | Task1 / MNIST（§0.0） | Task2 / EMNIST（P1） |
+| 现象 | medium（已删，勿引用） | full（唯一权威） |
 | --- | --- | --- |
-| 承载组 | **stable-only ≈ all-200**（77.5%） | **reserve-only ≈ all-200**（53.4%） |
-| 自然 WTA winner 主导组 | stable **98.4%** | reserve **64.8%** |
-| 屏蔽承载组 | mask-stable → **-58.2 pp** | mask-reserve → **-25.7 pp** |
-| 屏蔽「干扰组」 | mask-reserve → -0.1 pp | **mask-stable → +2.5 pp** |
-| oracle 路由含义 | Task1 → stable∪shared | Task2 → shared∪reserve |
+| Task1 stable-only vs all-200 | ≈ 0 pp | **-3.13 pp**（86.56% vs 89.69%） |
+| Task1 mask-stable | **-58 pp** | **-11.9 pp** |
+| Task2 reserve-only vs all-200 | ≈ 0 pp | **-13.3 pp** |
+| Task2 mask-stable | **+2.5 pp** | **-3.86 pp** |
 
-### P1 结论
+**此后：** 论文 claim、机制推断、路由规则设计 **只认 full**；`published_results/` 内仅保留 full JSON。
 
-1. **Task2 知识主要在 reserve** — reserve-only 仅比 all-200 低 0.9 pp；与 MNIST 上 stable-only ≈ all-200 **对称**。
-2. **stable 在 EMNIST 上是干扰源** — 虽只占 12% winner，mask-stable 仍 **+2.5 pp**；stable-only 仅 12%。
-3. **train–test mismatch 的推理侧证据成立** — Task1 应用 stable∪shared，Task2 应用 shared∪reserve；用错组（mask-reserve on EMNIST）跌至 28.6%。
-4. **HTM + group routing 有诊断级上界** — oracle mask-stable（56.8%）接近 §0.6 task-aware class-max（57.6%），机制不同、增益同量级。
-5. **尚未 claim** — 这是 **oracle 组 mask**，不是 HTM 自动推断 t̂；Acc_task（P2）与 Role-train 公平主表（P3）仍待跑。
+---
 
-**Caveat：** medium checkpoint（EMNIST 54.3% baseline）；full scale 与 multi-seed 待复验。NGSG reserve **训练 reroute** 实验 Task2 仅 33–36%（§0.3.1）与本诊断 **不同 checkpoint/训练协议** — 本结果说明「reserve 神经元已学到 EMNIST」，瓶颈在 **自然 WTA 未按 task 选组**。
+## 0.0 WTA 分区组诊断 — Task1 / full（`partition_group_diagnosis_full_seed0`）✅
 
-## 0.0.2 R3 — Oracle group routing，medium（2026-07-08）✅
+**Run：** `partition_group_diagnosis_full_seed0` · **协议：** full Task1 结束后（未训 Task2）；600 epoch，2400/class  
+**分区：** stable **60** / shared **60** / reserve **80** / dead **0**  
+**精简结果：** `published_results/diagnostics/partition_group_diagnosis_full_seed0.json`  
+**embedded trainer.evaluate Task1 acc：** **93.14%**（诊断路径 all-200：**89.69%**）
 
-**训练：** 与 catastrophic 相同（`readout_ablation_medium_seed0`）  
-**脚本：** `scripts/eval_oracle_group_routing.py`  
-**精简结果：** `published_results/diagnostics/r3_oracle_group_routing_medium_seed0.json`
+### 6.1 Group-only（Task1 / MNIST）
 
-| metric | natural all-200 | oracle routing | delta |
+| 条件 | 神经元数 | Task1 Acc | vs all-200 |
 | --- | ---: | ---: | ---: |
-| Task1 / MNIST | 55.60% | **68.70%** (mask_reserve) | **+13.10 pp** |
-| Task2 / EMNIST | 54.30% | **56.80%** (mask_stable) | **+2.50 pp** |
-| **Avg** | **54.95%** | **62.75%** | **+7.80 pp** |
+| **all-200（baseline）** | 200 | **89.69%** | — |
+| **stable-only** | 60 | **86.56%** | **-3.13 pp** |
+| shared-only | 60 | 77.31% | -12.38 pp |
+| reserve-only | 80 | 32.02% | -57.67 pp |
 
-Task2 行与 P1（§0.0.1）一致；Task1 侧 reserve winner 占 25.6%。
+natural WTA winner：**stable 74.9%**，shared **23.5%**，reserve **1.6%**。
 
-## 0.0.3 R0 full + R3 full — `paper_full_partition_seed0`（2026-07-08 服务器）✅
+### 6.2 Group-masked（Task1 / MNIST）
+
+| 条件 | 屏蔽谁 | Task1 Acc | vs all-200 |
+| --- | ---: | ---: | ---: |
+| mask-reserve | reserve | 89.69% | 0.00 pp |
+| mask-shared | shared | 86.47% | -3.22 pp |
+| **mask-stable** | stable | **77.78%** | **-11.91 pp** |
+
+### 结论（full，与 medium 不同）
+
+1. **stable 主导但非唯一** — stable-only 比 all-200 低 3.1 pp；**shared 单独可达 77.3%**，对 Task1 有实质贡献。
+2. **mask-stable 仍严重掉点**（-11.9 pp），但远小于 medium 上报告的 -58 pp。
+3. **Task1 保护须考虑 stable + shared**，不能假设「61 个 stable = 全部 Task1 知识」。
+
+**仍缺：** full 上 P0 random/shuffle 反事实（10 seeds）；multi-seed 主表。
+
+运行：
+
+```bash
+python scripts/eval_partition_group_diagnosis.py \
+  --config configs/ngsg/partition_group_diagnosis_full.yaml \
+  --train-task1 --device cuda
+```
+
+## 0.0.1 R0 full + P1/R3 Task2 诊断 — `paper_full_partition_seed0` ✅
 
 **配置：** `configs/ngsg/paper_full_partition_seed0.yaml`（600/100 epoch，2400/class，partition on，pure catastrophic，无 SDPM/reserve，`save_task2_model: true`）  
-**Run：** `paper_full_partition_seed0` · **服务器 commit：** `761d6f3`  
-**精简主表：** `published_results/baseline/paper_full_partition_seed0.json`  
-**本机镜像（不进 git）：** `experiments/server_paper_full_partition_seed0/`
+**Run：** `paper_full_partition_seed0`  
+**精简主表：** `published_results/baseline/paper_full_partition_seed0.json`
 
 ### 主表（trainer.evaluate，与论文对齐 = **R0**）
 
-| 指标 | paper_full_partition_seed0 | 论文参考 | §0.1 历史 full |
-| --- | ---: | ---: | ---: |
-| Task1 after Task1 | **93.14%** | 90.8 ± 0.9% | 92.84% |
-| Task1 after Task2 | **47.54%** | 48.1 ± 4.8% | 48.42% |
-| Task2 after Task2 | **75.43%** | 78.4 ± 1.2% | 74.91% |
-| Forgetting | **45.6 pp** | ~42.7% | 44.4 pp |
-| Avg Acc | **61.48%** | — | 61.67% |
+| 指标 | paper_full_partition_seed0 | 论文参考 |
+| --- | ---: | ---: |
+| Task1 after Task1 | **93.14%** | 90.8 ± 0.9% |
+| Task1 after Task2 | **47.54%** | 48.1 ± 4.8% |
+| Task2 after Task2 | **75.43%** | 78.4 ± 1.2% |
+| Forgetting | **45.6 pp** | ~42.7% |
+| Avg Acc | **61.48%** | — |
 
-**结论：** full catastrophic **复现成功**；Task1 **未被保护**（93%→47%），这是要解决的遗忘问题本身。
-
-**Partition（Task1 后）：** stable **60** / shared **60** / reserve **80** / dead **0**
+**结论：** full catastrophic **复现成功**；Task1 **未被保护**（93%→47%）。
 
 ### P1 — Task2/EMNIST 组诊断（full）
 
@@ -330,13 +277,13 @@ Task2 行与 P1（§0.0.1）一致；Task1 侧 reserve winner 占 25.6%。
 | 条件 | EMNIST Acc | vs all-200 |
 | --- | ---: | ---: |
 | all-200 natural WTA | **70.44%** | — |
-| reserve-only | 57.14% | -13.30 pp |
+| reserve-only | 57.14% | **-13.30 pp** |
 | **mask-stable**（shared∪reserve） | **66.57%** | **-3.86 pp** |
 | mask-reserve | 30.56% | -39.88 pp |
 
-natural WTA winner：reserve **72.6%**，stable **8.9%**。
+natural WTA winner：reserve **72.6%**，shared **18.5%**，stable **8.9%**。
 
-**与 medium P1 对比：** medium 上 mask-stable **+2.50 pp**；**full 上 -3.86 pp** — scale 不同，路由规则不能照搬。
+**读数：** Task2 知识在 **shared + reserve 共同承载**，不是「reserve-only ≈ all-200」；mask-stable **略亏**（与 medium 上 +2.5 pp **方向相反**）。
 
 ### R3 — Oracle group routing（full，诊断路径）
 
@@ -348,12 +295,11 @@ natural WTA winner：reserve **72.6%**，stable **8.9%**。
 | Task2 / EMNIST | 70.44% | **66.57%** (mask_stable) | **-3.86 pp** |
 | **Avg** | **52.66%** | **61.12%** | **+8.46 pp** |
 
-**如何读 R3（避免误判）：**
+**如何读 R3：**
 
-1. **+20.78 pp（Task1）** = 在**已遗忘权重**上，屏蔽 reserve 抢答还能**相对**多捞分；**不是** Task1 保护成功（主表仍 47.54%，oracle 绝对值 55.66% 仍很低）。
-2. **诊断 stable-only（Task1）= 63.75%** > mask_reserve 55.66% → 当前 Oracle 规则（stable∪shared）**不是 Task1 最优**；shared 在拖后腿。
-3. **Task2 oracle 略亏** → full 上「mask stable」不能作为无脑默认；需配合 **R1 Role-train** 或调路由规则。
-4. **R3 平均 +8.46 pp** 是「路由机制 headroom」，**不是**可部署方法；**HTM（R2）** 目标是闭卷逼近此上界。
+1. **+20.78 pp（Task1）** = 在**已遗忘权重**上屏蔽 reserve 抢答的相对增益；**不是**保护成功（主表仍 47.54%）。
+2. **Task2 oracle 略亏** → full 上「mask stable」不能作为无脑默认；需 **R1 Role-train** 或调路由。
+3. **R3 平均 +8.46 pp** 是路由 headroom，**不是**可部署方法。
 
 **诊断命令（full checkpoint）：**
 
@@ -422,96 +368,45 @@ SDPM 摘要（Task2，`result.json` extra）：`gate_mean≈0.973`，`protected_
 
 | 模块 | 状态 | 在方案 B 中的位置 |
 | --- | --- | --- |
-| **Tier A 现象诊断** | ✅ medium PASS（§0.0） | Step 1 动机：stable 承载 Task1 |
-| **R0 catastrophic full** | ✅ `paper_full_partition_seed0`（§0.0.3） | 主表对齐论文 |
-| **P1 Task2 EMNIST mask-stable** | ✅ medium +2.50 pp；full **-3.86 pp**（§0.0.1/3） | 路由规则 scale 敏感 |
-| **R3 Oracle routing** | ✅ medium +7.80 pp avg；full +8.46 pp avg（§0.0.2/3） | 推理 headroom；非保护成功 |
-| **train–test mismatch 诊断** | ✅ reserve 38% STDP→reserve（§0.3.1） | 训练侧问题定义 |
+| **Tier A 现象诊断** | ✅ full Task1（§0.0） | Step 1 动机；shared 有实质贡献 |
+| **R0 catastrophic full** | ✅ `paper_full_partition_seed0`（§0.0.1） | 主表对齐论文 |
+| **P1 Task2 EMNIST mask-stable** | ✅ full **-3.86 pp**（§0.0.1） | 路由规则须 full 重验 |
+| **R3 Oracle routing** | ✅ full +8.46 pp avg（§0.0.1） | 推理 headroom；非保护成功 |
+| **train–test mismatch 诊断** | 🟡 概念 + reserve 历史 | 训练侧问题定义 |
 | **SDPM-only full** | ✅ +9.03 pp Task1 retention（§0） | 辅助对照 |
 | **Role-train / HTM / R2** | ⬜ 未闭环 | **方案 B 主实现** |
-| **Phased Task2** | ❌ medium FAIL（§0.9） | 历史 |
-| **reserve / full NGSG** | ❌ Task2 掉点（§0.3.1） | 历史 |
+| **Phased Task2** | ❌ 历史 FAIL | medium 已删，勿复现 |
+| **reserve / full NGSG** | ❌ Task2 掉点 | 历史；full 未验证 |
 
-历史进度：partition 组诊断 + P0 反事实 PASS；full SDPM-only；medium 消融 #1–#7；Phased 首跑 FAIL。
+历史进度：full partition 组诊断 + R0/P1/R3；full SDPM-only。**medium 配置与结果已于 2026-07-09 删除。**
 
 ### 代码 commit 时间线（近期）
 
 | commit | 内容 |
 | --- | --- |
 | `4f03da0` | SDPM 与 partition 共用 `occupancy_stats.py`（`f_i/q_i/I_i` 对齐） |
-| `8a9e78a` | novelty gate + reserve activation + `configs/ngsg/` medium 消融 YAML |
+| `8a9e78a` | novelty gate + reserve activation（历史；medium 消融 YAML 已删） |
 | `cf2ae88` | 修复 C2 cache 下 4D S3 potentials 解析 |
 | `0aa21a3` | 修复 `_select_neuron` 语法错误 |
 | `9b55533` | test-time winner 诊断 + `stable_mismatch` reserve reroute |
 | `3f97631` | STDP feedback 与 rerouted winner 对齐；**full SDPM-only 在此 commit 跑完** |
 
-### 历史参考：对齐前 SDPM medium（`dev` 旧版，2026-07-02）
+### 历史参考：对齐前 SDPM（`dev` 旧版，2026-07-02，非 full 正式数字）
 
 | 配置 | Task1 after Task1 | Task1 after Task2 | Task2 after Task2 | Forgetting | Avg Acc |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | no-SDPM same-code | 79.6% | 65.9% | 60.3% | 13.7 pp | 63.10% |
 | SDPM-only（未对齐 q_i） | 79.6% | 68.1% | 54.8% | 11.5 pp | 61.45% |
 
-这组结果说明旧版 SDPM 能保护 Task1，但明显牺牲 Task2。**不能**与下表新 paired 结果直接混用。
+这组结果为旧版小规模验证，**不能**与 §0 / §0.0.1 的 full 数字混用。
 
+## 0.3 reserve / NGSG train–test mismatch（历史结论，2026-07-03）
 
-服务器 medium partition 验证结果（`paper_medium_partition_seed0`，`dev@9d9bded`）：
+> **medium 消融 run 已删除**；下列为当时从 reserve-only / full NGSG 实验中归纳的机制问题，**未在 full 上复验 efficacy**。
 
-| 验证项 | 结果 | 判断 |
-| --- | --- | --- |
-| Metrics | Task1 after Task1 77.2%，Task1 after Task2 69.8%，Task2 after Task2 58.7%，Forgetting 7.4 pp，Avg Acc 64.25% | medium 诊断结果，不作为最终论文数字。 |
-| `winner_label_counts` | shape 200 x 10，总数 50,000 | 已确认真实 per-neuron label counts 写入 `result.json`。 |
-| partition | stable 61，shared 59，reserve 80，dead 0 | 基本合理；stable 只比建议上界 60 多 1 个，先不急调阈值。 |
-| q_i vs decision_map fallback | 真实 q mean 0.504，fallback active q=1.0；86/200 active neurons 的 dominant label 与 decision_map 不一致 | fallback 明显高估选择性，后续 SDPM/reserve 应以真实 `winner_label_counts` 计算的 q_i 为准。 |
+**现象（历史 medium run）：** reserve-only 与 full NGSG 的 Task1 after Task2 略优于 no-SDPM，但 **Task2 从 ~59% 跌至 33–36%**。
 
-本机服务器产物副本：`experiments/server_paper_medium_partition_seed0/`。本机诊断产物：`experiments/diagnostics/paper_medium_partition_seed0/`，包含 `partition_validation.json` 和三张图：`f_i` 直方图、`q_i` vs `f_i` 散点图、dominant neuron per class 分布图。以上目录属于运行产物，不进入 git。
-
-## 0.3 medium 消融矩阵（seed 0，`0aa21a3` 同 lineage）
-
-所有下列 medium 实验使用相同数据规模（每类 100 train/test）、Task1 S3 50 epoch、Task2 S3 10 epoch、seed 0、相同 feature checkpoint 与 C2 cache。
-
-| # | 组别 | run name | SDPM | reserve | 状态 | Task1→1 | Task1→2 | Task2→2 | Forgetting | Avg Acc |
-| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 1 | baseline / no-op | `noop_medium_*` / `paper_medium_partition_seed0` | off | off | ✅ | 77.2% | 69.8% | 58.7% | 7.4 pp | 64.25% |
-| 2 | no-SDPM paired | `paper_medium_no_sdpm_aligned_seed0` | off | off | ✅ | 77.2% | 69.8% | 58.7% | 7.4 pp | 64.25% |
-| 3 | SDPM aligned | `paper_medium_sdpm_aligned_seed0` | on | off | ✅ | 77.2% | **74.2%** | 57.8% | **3.0 pp** | **66.0%** |
-| 4 | reserve-only | `paper_medium_reserve_only_seed0` | off | on | ✅ | 77.2% | 72.7% | **33.6%** | 4.5 pp | 53.15% |
-| 5 | random reserve | `paper_medium_random_reserve_seed0` | off | random | ⬜ 待跑 | - | - | - | - | - |
-| 6 | full NGSG | `paper_medium_ngsg_seed0` | on | on | ✅ | 77.2% | 71.3% | **36.3%** | 5.9 pp | 53.80% |
-| 7 | **Phased Task2** | `phased_task2_medium_seed0` | off | off（phased） | ✅ **FAIL** | 77.9% | **11.0%** | **40.9%** | 66.9 pp | 25.95% |
-
-第 7 行详见 §0.9；与 reserve 无关，启用 `continual.phased_task2`。
-
-服务器路径：`/root/autodl-tmp/NGSG-spyketorch-4a958ae`。`#4/#6` 于 `0aa21a3` 重跑完成（`dev@cf2ae88+`）。
-
-### 对齐后 SDPM vs no-SDPM（paired，`4f03da0`+）
-
-| 对比项 | no-SDPM | SDPM aligned | 差值 |
-| --- | ---: | ---: | ---: |
-| Task1 after Task1 | 77.2% | 77.2% | 0.0 |
-| Task1 after Task2 | 69.8% | 74.2% | **+4.4 pp** |
-| Task2 after Task2 | 58.7% | 57.8% | -0.9 pp |
-| Forgetting | 7.4 pp | 3.0 pp | **-4.4 pp** |
-| Avg Acc | 64.25% | 66.0% | **+1.75 pp** |
-
-### 0.3.1 reserve / NGSG Task2 掉点诊断（2026-07-03）
-
-**现象：** reserve-only 与 full NGSG 的 Task1 after Task2 略优于 no-SDPM（72.7 / 71.3 vs 69.8%），但 **Task2 从 58.7% 跌至 33–36%**，Avg Acc 反而最低。
-
-**Task2 训练统计（10 epoch × 1000 samples）：**
-
-| 指标 | reserve-only | full NGSG |
-| --- | ---: | ---: |
-| `novel_fraction` | 38.4% | 38.3% |
-| `recruited_updates` | 3842 | 3825 |
-| `recruitment_rate` | 0.384 | 0.383 |
-| `skipped_low_novelty` | 6158 | 6175 |
-| `mean_score`（natural winner occupancy） | 0.136 | 0.136 |
-| Task2 末 epoch train acc proxy | ~41% | ~41% |
-
-**最可能根因：训练 STDP 目标与推理 winner 不一致（train–test mismatch）**
-
-当前 Task2 循环（`baseline_trainer.py`）为：
+**最可能根因：训练 STDP 目标与推理 winner 不一致**
 
 ```text
 forward → natural WTA winner → decision（用于 acc 统计）
@@ -519,109 +414,43 @@ forward → natural WTA winner → decision（用于 acc 统计）
        → reward/punish：对 rerouted winner 做 STDP
 ```
 
-推理 / 测试时 **不做 reroute**，预测仍由 natural WTA + `decision_map` 决定。约 **38%** 的 STDP 更新被写入 reserve 神经元，但这些神经元在测试竞争里往往 **仍输给 Task1 已占用的 stable/shared 神经元**，导致 EMNIST 学不上去。
+推理 / 测试时 **不做 reroute**；约 **38%** 的 STDP 更新被写入 reserve，但测试竞争里 reserve 常输给 stable/shared。
 
-**次要因素：**
+**当前可写结论（full 证据链）：**
 
-1. **`is_novel` 语义：** 代码里 `occupancy >= 0.15` 才 recruit，实际是「旧任务高占用 winner 触发避让」，不是「低占用才算 novel」；命名易误解，但逻辑本身是保护旧神经元。
-2. **recruit 策略：** `_select_neuron` 在 class-local reserve 里取 **potential 最大**者，不等于测试时会赢的 neuron；reserve 在 Task1 几乎未训练，potential 排序噪声大。
-3. **SDPM + reserve 叠加：** full NGSG 的 Task2 比 reserve-only 还低 2.7 pp，SDPM 进一步压低 shared 神经元可塑性，可能加剧「能赢的 neuron 学不动」。
+1. **baseline 复现成立**（full 47.54% Task1 after Task2，§0.1 / §0.0.1）。
+2. **对齐后 SDPM 在 full 上改善旧任务保持**（§0，+9.03 pp）。
+3. **reserve / full NGSG 不能作为主方法 claim**；机制修正后再考虑 full 复跑。
 
-**建议下一步（按优先级）：**
+**下一步：** full 上 hard-freeze stable（Tier B）；修 reserve train–test mismatch 后再考虑 full NGSG。
 
-1. **诊断实验：** Task2 结束后统计 reserve 神经元 test-time win rate vs stable/shared；确认 train–test mismatch。
-2. **机制修正（择一或组合）：** 仅对「natural winner 为 stable 且 decision≠target」reroute；或 recruit 后同步更新 `decision_map`/boost reserve 在 WTA 中的竞争；或降低 `novelty_threshold` 减少 reroute 比例做 sensitivity。
-3. **对照：** 跑 `#5 random reserve`；试 threshold ∈ {0.25, 0.35, 0.50}。
-4. **论文叙事（已更新为方案 B + HTM）：** 主方法为 **role-aware training + HTM task memory retrieval + group routing**；SDPM / reserve / Phased 为历史或辅助路线（见文首「当前主线」）。
-
-**当前可写结论：**
-
-1. **baseline 复现成立**（full 48.42% Task1 after Task2，见 §0.1）。
-2. **统计模块 no-op**（logging / partition 不改变 medium 指标）。
-3. **对齐后 SDPM 在 medium 与 full 上均改善旧任务保持与 Avg Acc**（medium §0.3 表；full §0）。
-4. **reserve 代码跑通但 medium 上 Task2 失效**，根因高度指向 STDP reroute 与推理 WTA 脱节；**不能**写「完整 NGSG 优于 SDPM-only」。
-
-**当前还不能写成论文结论的内容：**
-
-- reserve / full NGSG 作为有效创新点的 efficacy claim（full NGSG 未跑；reserve medium 失效）。
-- full SDPM-only 目前仅 seed 0；多 seed 待补。
-
-**下一步：**
-
-1. full 上复跑 §0.5 partition 组诊断（`save_task1_model: true` + full config）。
-2. 补跑 `paper_medium_random_reserve_seed0` 与 random-partition 对照。
-3. 修 reserve train–test mismatch；测 Task2 reserve test-time win rate。
-4. full SDPM-only 多 seed；reserve 稳定后再考虑 full NGSG。
-5. 汇总到 `CATASTROPHIC_FORGETTING_REPRODUCTION.md`。
-
-## 0.4 Logging / partition no-op 对照（2026-07-03）
-
-为了确认统计模块本身不改变 baseline 学习行为，服务器上补跑了三组 seed 0 medium 对照。三组除统计开关外保持相同数据、epoch、checkpoint、C2 cache 和随机种子；SDPM 均未启用。
-
-| 组别 | run name | winner logging | partition | Task1 after Task1 | Task1 after Task2 | Task2 after Task2 | Forgetting | Avg Acc |
-| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| pure baseline | `noop_medium_baseline_seed0` | off | off | 77.2% | 69.8% | 58.7% | 7.4 pp | 64.25% |
-| logging-only | `noop_medium_logging_seed0` | on | off | 77.2% | 69.8% | 58.7% | 7.4 pp | 64.25% |
-| logging + partition | `paper_medium_partition_seed0` | on | on | 77.2% | 69.8% | 58.7% | 7.4 pp | 64.25% |
-
-结论：在 seed 0 medium 配置下，winner logging 和 neuron partition 拟合均没有可观察到的学习行为扰动。这个结论只支持“当前统计路径是 no-op 诊断模块”，不等价于 full 规模或多 seed 的最终证明。
-
-本机服务器产物副本：`experiments/server_noop_medium_baseline_seed0/`、`experiments/server_noop_medium_logging_seed0/`、`experiments/server_paper_medium_partition_seed0/`。本机汇总产物：`experiments/diagnostics/noop_medium_controls/noop_medium_controls_summary.json` 和 `experiments/diagnostics/noop_medium_controls/noop_medium_controls_summary.csv`。
 
 ## 0.5 Partition 组推理诊断 — 协议与复现（结论见 §0.0）
 
-§0.0 已记录 **6.1 / 6.2 完整数据与结论**。本节补充实验目的、协议细节与命令。
+§0.0 已记录 **full Task1** 6.1 / 6.2 完整数据。本节补充协议与命令。
 
-**目的：** 验证 stable/shared/reserve 分区是否具有 **功能意义**（不是贴标签），并判断 Task2 可动用哪些神经元池。
+**目的：** 验证 stable/shared/reserve 分区是否具有 **功能意义**（不是贴标签）。
 
-**协议：** Task1 训练完成后立即在 **MNIST 测试集**上评估；**未训练 Task2**。每类 100 train/test，S3 50 epoch。推理使用 `decision_map` + global WTA，仅在指定神经元子集内竞争（group-only / group-masked）。
+**协议：** Task1 训练完成后在 **MNIST 测试集**上评估；**未训练 Task2**。full：600 epoch，2400/class。推理使用 `decision_map` + global WTA，仅在指定神经元子集内竞争（group-only / group-masked）。
 
-**Task2/EMNIST 对称诊断（P1）** 见 §0.0.1（`model_after_task2.pt`，mask-stable **+2.50 pp**）。
-
-**结果摘要（与 §0.0 一致）：**
-
-| 类型 | 关键条件 | Task1 acc | vs all-200 |
-| --- | --- | ---: | ---: |
-| 6.1 | stable-only (61) | 76.40% | -0.10 pp |
-| 6.1 | reserve-only (76) | 10.10% | -66.40 pp |
-| 6.2 | mask-reserve | 76.60% | +0.10 pp |
-| 6.2 | mask-stable | 25.40% | -51.10 pp |
-
-natural WTA winner：stable 97.8% / shared 1.6% / reserve 0.6%。
-
-**注意：** medium 上 embedded Task1 acc ≈ 77.9%（非 full ~93%）；相对关系（stable 主导）待 full Task1 checkpoint 复验（§0.8 P0-4）。
+**Task2/EMNIST 对称诊断（P1）** 见 §0.0.1（`paper_full_partition_seed0`，`model_after_task2.pt`）。
 
 运行：
 
 ```bash
-python scripts/eval_partition_group_diagnosis.py --config configs/ngsg/partition_group_diagnosis_medium.yaml --train-task1 --device cuda
-python scripts/eval_partition_group_diagnosis.py --run-dir experiments/partition_group_diagnosis_medium_seed0 --device cuda
+python scripts/eval_partition_group_diagnosis.py \
+  --config configs/ngsg/partition_group_diagnosis_full.yaml \
+  --train-task1 --device cuda
+
+python scripts/eval_partition_group_diagnosis.py \
+  --run-dir experiments/partition_group_diagnosis_full_seed0 --device cuda
 ```
 
-精简结果：`published_results/diagnostics/partition_group_diagnosis_medium_seed0.json`。完整产物在 `experiments/partition_group_diagnosis_medium_seed0/`（不进 git）。
+精简结果：`published_results/diagnostics/partition_group_diagnosis_full_seed0.json`。
 
-## 0.6 Task-aware 读出消融（Task2 后，medium，2026-07-06）
+## 0.6 Task-aware 读出消融（历史，medium 已删）
 
-目的：比较标准 WTA + `decision_map` 与基于 `winner_label_counts` 的 **task-aware class-max 读出**（不改训练，只改推理；**不是** role-mask WTA，也 **不是** HTM 记忆路由）。
-
-协议：medium SDPM+reserve（同 full NGSG 结构），Task2 结束后评估。checkpoint：`model_after_task2.pt`。
-
-| 测试集 | 标准 WTA + decision_map | task-aware class-max | 差值 |
-| --- | ---: | ---: | ---: |
-| MNIST after Task2 | 55.6% | **59.7%**（Task1 dominant label） | **+4.1 pp** |
-| EMNIST after Task2 | 54.3% | **57.6%**（Task2 dominant label） | **+3.3 pp** |
-
-注意：必须用 **分任务 label 表**（MNIST 用 Task1 统计，EMNIST 用 Task2 统计）；混用 Task1 label 测 EMNIST 会跌至 16.5%。
-
-**与方案 B 的关系：** 证明「换推理规则能涨分」，但是 **换 label 映射 / class-max**，不是 **按角色 mask WTA**。P1（§0.0.1）已验证 **mask-stable on EMNIST +2.50 pp**；与 class-max +3.3 pp 同量级、机制不同。
-
-运行：
-
-```bash
-python scripts/eval_readout_ablation.py --run-dir experiments/readout_ablation_medium_seed0 --device cuda
-```
-
-精简结果：`published_results/diagnostics/readout_ablation_medium_seed0.json`。
+task-aware class-max 读出曾在 **已删除的 medium run** 上验证「换推理规则能涨分」（MNIST +4.1 pp，EMNIST +3.3 pp）。**无 full 版 published 结果**；若需复验须在 full checkpoint 上重跑 `scripts/eval_readout_ablation.py`。
 
 ## 0.7 论文叙事（方案 B + HTM，2026-07-08）
 
@@ -634,8 +463,8 @@ python scripts/eval_readout_ablation.py --run-dir experiments/readout_ablation_m
 ### 证据链（方案 B + HTM）
 
 ```text
-现象层  →  stable 几乎单独承载 Task1 推理（§0.0）
-问题层  →  train–test mismatch：训练写 reserve，测试 stable 赢（§0.3.1）
+现象层  →  full：stable 主导 Task1，shared 有实质贡献（§0.0）
+问题层  →  train–test mismatch；full P1 显示 shared+reserve 共载 Task2（§0.0.1）
 方法层  →  Role-train（λ）+ HTM memory retrieval + group routing
 对照层  →  R0 catastrophic vs R1 Role-train（公平）；R2 HTM vs R1；R3 oracle 上界
 ```
@@ -644,10 +473,10 @@ python scripts/eval_readout_ablation.py --run-dir experiments/readout_ablation_m
 
 | 层级 | 论点 | 支撑 | 状态 |
 | --- | --- | --- | --- |
-| **现象** | 高频 winner 子集承载 Task1 | §0.0 P0 | ✅ medium |
-| **问题** | 训练分工与推理 WTA 不一致损害 Task2 | §0.3.1 reserve 统计 | ✅ 训练侧 |
+| **现象** | 高频 winner 子集承载 Task1（full） | §0.0 | ✅ full |
+| **问题** | 训练分工与推理 WTA 不一致 | §0.3 历史 + §0.0.1 P1 | 🟡 |
 | **方法** | Role-train 缓解遗忘且推理协议与 continue 一致 | R1 vs R0 full | ⬜ |
-| **机制** | HTM 可推断 task（Acc_task）；group routing 提升分类（Acc_class） | P2–P6；P1 oracle mask **+2.5 pp** ✅ | 🟡 P1 ✅；P2–P4 ⬜ |
+| **机制** | HTM 可推断 task；group routing 提升分类 | P2–P6；P1 full 已跑 | 🟡 P1 ✅；P2–P4 ⬜ |
 | **辅助** | SDPM soft protection 缓解遗忘 | §0 full +9 pp | ✅ 但非主叙事 |
 
 ### 不能 claim
@@ -671,56 +500,52 @@ SDPM-only full：Task1 after Task2 **+9.03 pp** vs no-SDPM（§0）。可作为 
 
 | ID | 实验 | 规模 | 状态 | 说明 |
 | ---: | --- | --- | --- | --- |
-| **P1** | Task2 checkpoint，**EMNIST 测试 + mask-stable** | medium | ✅ | mask-stable **+2.50 pp**（§0.0.1）；reserve-only ≈ all-200 |
-| **P2** | HTM 记忆分离度（`m_1,m_2`；可先 static mean） | medium | ⬜ | 报 **Acc_task** / 混淆矩阵 |
+| **P1** | Task2 checkpoint，**EMNIST 测试 + mask-stable** | full | ✅ | full **-3.86 pp**（§0.0.1） |
+| **P2** | HTM 记忆分离度（`m_1,m_2`；可先 static mean） | full | ⬜ | 报 **Acc_task** / 混淆矩阵 |
 | **P3** | **Role-train** vs R0 catastrophic | full, ≥3 seed | ⬜ | **与 continue 公平主表** |
 | **P4** | **HTM + group routing** 端到端（R2） | full | ⬜ | **Acc_task + Acc_class** |
-| **P5** | Oracle routing（R3） | medium + full | ✅ | medium +7.80 pp；full +8.46 pp（§0.0.2–3） |
-| **P6** | R4 static mean prototype vs R2 HTM | medium | ⬜ | 消融：内部记忆模块 vs 外置均值 |
+| **P5** | Oracle routing（R3） | full | ✅ | full +8.46 pp（§0.0.1） |
+| **P6** | R4 static mean prototype vs R2 HTM | full | ⬜ | 消融：内部记忆模块 vs 外置均值 |
 
-**诊断命令（P1，在已有 Task2 checkpoint 上）：**
+**诊断命令（P1，full checkpoint）：**
 
 ```bash
-# 需扩展脚本：--checkpoint-stage task2 --test-task emnist --group-mask stable
-# 当前 eval_partition_group_diagnosis.py 默认只测 MNIST（task_bundles[0]）
 python scripts/eval_partition_group_diagnosis.py \
-  --run-dir experiments/readout_ablation_medium_seed0 \
-  --checkpoint-stage task2 --device cuda
+  --run-dir experiments/paper_full_partition_seed0 \
+  --checkpoint-stage task2 --test-task task2 --device cuda
 ```
 
-### Tier A — 现象层（已完成 medium，支撑 Step 1）
+### Tier A — 现象层（full）
 
-- stable-only ≈ all-200（**77.50%**）✅
-- mask-stable on **Task1/MNIST** → **19.30%** ✅（§0.0）
-- mask-stable on **Task2/EMNIST** → **56.80%**（+2.50 pp）✅（§0.0.1，P1）
-- random / shuffle 反事实 PASS ✅
-- **仍缺：** P0-4 full Task1、P0-3 multi-seed
+- full Task1：stable-only **86.56%** vs all-200 **89.69%**（-3.13 pp）✅
+- full Task1 mask-stable → **77.78%**（-11.9 pp）✅
+- full Task2 mask-stable → **66.57%**（-3.86 pp）✅（§0.0.1）
+- **仍缺：** full P0 random/shuffle 反事实；multi-seed 主表
 
 ### 历史路线 — SDPM / Phased / reserve（归档，非主表）
 
 | 路线 | 代表结果 | 状态 |
 | --- | --- | --- |
 | SDPM-only full | Task1 after T2 +9.03 pp | ✅ 辅助 |
-| Tier B hard-freeze vs SDPM | — | ⬜ SDPM 线对照 |
-| Phased Task2 medium | Task1 after T2 **11%** | ❌ §0.9 |
-| reserve / full NGSG medium | Task2 **33–36%** | ❌ §0.3.1 |
+| Tier B hard-freeze vs SDPM | — | ⬜ |
+| Phased Task2 | Task1 after T2 **11%**（历史 medium） | ❌ §0.9 |
+| reserve / full NGSG | Task2 **33–36%**（历史 medium） | ❌ §0.3 |
 
-### Tier A 后验命令（不变）
+### Tier A 后验命令
 
 ```bash
 python scripts/eval_partition_group_diagnosis.py \
-  --run-dir experiments/partition_group_diagnosis_medium_seed0 \
-  --counterfactuals --device cuda \
-  --write-json experiments/partition_group_diagnosis_medium_seed0/diagnostics/partition_counterfactuals.json
+  --config configs/ngsg/partition_group_diagnosis_full.yaml \
+  --train-task1 --counterfactuals --device cuda
 
-python scripts/eval_partition_group_diagnosis.py --config configs/ngsg/partition_group_diagnosis_medium_seed1.yaml --train-task1 --counterfactuals --device cuda
-python scripts/eval_partition_group_diagnosis.py --config configs/ngsg/partition_group_diagnosis_medium_seed2.yaml --train-task1 --counterfactuals --device cuda
-python scripts/eval_partition_group_diagnosis.py --config configs/ngsg/partition_group_diagnosis_full.yaml --train-task1 --counterfactuals --device cuda
+python scripts/eval_partition_group_diagnosis.py \
+  --run-dir experiments/partition_group_diagnosis_full_seed0 \
+  --counterfactuals --device cuda
 ```
 
-## 0.9 Phased Task2 三阶段方案（2026-07-07）— **历史尝试，medium FAIL**
+## 0.9 Phased Task2 三阶段方案（2026-07-07）— **历史尝试，FAIL**
 
-> **非当前主线。** 方案 B 改为「Role-train + HTM task memory + group routing」；本节保留失败经验与数字。
+> **非当前主线。** medium 配置已删（2026-07-09）；本节仅保留失败经验，**勿复现 medium**。
 
 **目标（当时）：** Task1 记忆留在 stable ~61；Task2 在 **reset 池（shared+reserve，~139）** 上学习 EMNIST；stable 在 Task2 训练时不「抢答」、权重不被覆盖；联合阶段允许 200 路 WTA 但 stable 赢则 reroute STDP。
 
@@ -748,21 +573,18 @@ python scripts/eval_partition_group_diagnosis.py --config configs/ngsg/partition
 | `src/continual/phased_task2.py` | `PhasedTask2Controller`：reset、WTA mask、stable-win reroute、joint 阶段 freeze |
 | `src/models/paper_mozafari.py` | `s3_wta_allow_mask`（仅训练时 mask potential） |
 | `src/trainers/baseline_trainer.py` | 集成三阶段调度；保存 init conv3；reset 在 Task1 eval 后执行 |
-| `configs/baseline/catastrophic_mnist_emnist_paper_medium_phased_task2.yaml` | medium：phase1=8，phase2=2，Task2 S3=10 |
-| `configs/baseline/catastrophic_mnist_emnist_phased_task2.yaml` | full：phase1=80，phase2=20，Task2 S3=100 |
+| `catastrophic_mnist_emnist_phased_task2.yaml` | full：phase1=80，phase2=2，Task2 S3=100 |
 | `tests/test_phased_task2.py` | schedule / reset 单测 |
 
-运行（medium）：
+运行（full，后置）：
 
 ```bash
-python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist_paper_medium_phased_task2.yaml --device cuda --run-name phased_task2_medium_seed0
+python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist_phased_task2.yaml --device cuda --run-name phased_task2_full_seed0
 ```
 
-本机产物（不进 git）：`experiments/phased_task2_medium_seed0/result.json`。
+### 历史 medium seed0 结果（配置已删，勿复现）
 
-### medium seed0 结果（`phased_task2_medium_seed0`，修复 reset 时序后）
-
-| 指标 | Phased Task2 | no-op baseline medium |
+| 指标 | Phased Task2 | no-op baseline |
 | --- | ---: | ---: |
 | Task1 after Task1 | **77.9%** | 77.2% |
 | Task1 after Task2（200 路 WTA） | **11.0%** | 69.8% |
@@ -798,7 +620,7 @@ python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emni
 
 ## 1. 当前目标（方案 B + HTM）
 
-1. ~~**P1**~~：✅ Task2 checkpoint + **EMNIST + mask-stable**（§0.0.1，+2.50 pp）。
+1. ~~**P1**~~：✅ Task2 checkpoint + **EMNIST + mask-stable**（§0.0.1，full **-3.86 pp**）。
 2. **实现 HTM 模块**：`m_k` 记忆神经元、Task 训完后 EMA 写入、`cos(r(x), m_k)` 推断 t̂；`src/continual/task_memory.py`（待建）。
 3. **Role-train 配置**：stable freeze + shared/reserve 分工；与 **R0 catastrophic** full 对比（公平主表）。
 4. **接入 group routing**：HTM→t̂→G_{t̂} mask WTA + `role_aware_inference.py` + trainer `evaluate`。
@@ -824,23 +646,19 @@ python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emni
 | --- | --- | --- |
 | `catastrophic_mnist_emnist.yaml` | 服务器正式完整 baseline | 完整 paper-source MNIST → EMNIST；600/100 epoch。 |
 | `catastrophic_mnist_emnist_feature_checkpoint.yaml` | checkpoint 缺失或重建时 | feature-only：只训 S1/S2，跳过 S3。 |
-| `catastrophic_mnist_emnist_paper_medium.yaml` | medium 诊断 | 每类 100 样本；纯 baseline。 |
-| `catastrophic_mnist_emnist_paper_medium_sdpm.yaml` | SDPM + partition medium | SDPM 与 reserve 开关见 YAML；当前 SDPM 默认 on。 |
-| `catastrophic_mnist_emnist_paper_medium_no_sdpm.yaml` | paired 对照 | 与 medium_sdpm 相同，仅 `sdpm_gate.enabled: false`。 |
-| `catastrophic_mnist_emnist_sdpm.yaml` | full SDPM-only | medium 消融稳定后再跑 full。 |
-| `catastrophic_mnist_emnist_paper_medium_phased_task2.yaml` | **Phased Task2 medium** | phase1=8，phase2=2；reset non-stable conv3；与 reserve 互斥。 |
-| `catastrophic_mnist_emnist_phased_task2.yaml` | **Phased Task2 full** | phase1=80，phase2=20；修 Phase1 竞争后再跑。 |
+| `catastrophic_mnist_emnist_sdpm.yaml` | full SDPM-only | 600/100 epoch；aligned occupancy + SDPM。 |
+| `catastrophic_mnist_emnist_phased_task2.yaml` | **Phased Task2 full**（历史） | phase1=80，phase2=20；后置。 |
 
-### `configs/ngsg/`（`8a9e78a` 新增）
+### `configs/ngsg/`
 
 | 配置 | SDPM | reserve | 用途 |
 | --- | --- | --- | --- |
-| `catastrophic_mnist_emnist_paper_medium_reserve_only.yaml` | off | on | 只验证 reserve 招募 |
-| `catastrophic_mnist_emnist_paper_medium_ngsg.yaml` | on | on | full NGSG medium |
-| `catastrophic_mnist_emnist_paper_medium_random_reserve.yaml` | off | random | reserve 随机对照 |
-| `partition_group_diagnosis_medium.yaml` | off | off | Task1 后 partition 组诊断；`save_task1_model: true` |
 | `paper_full_partition_seed0.yaml` | off | off | **R0 full**（600/100）；partition；`save_task2_model: true`；P1/R3 |
-| `readout_ablation_medium_seed0.yaml` | on | on | task-aware 读出消融；`save_task2_model: true` |
+| `partition_group_diagnosis_full.yaml` | off | off | Task1 后 partition 组诊断；`save_task1_model: true` |
+| `catastrophic_mnist_emnist_full_sdpm_only.yaml` | on | off | full SDPM-only |
+| `catastrophic_mnist_emnist_full_reserve_wt_*.yaml` | 见 YAML | on | full reserve 实验（后置） |
+
+**已删除（2026-07-09）：** 全部 `*medium*` YAML（baseline / ngsg 消融、partition 诊断、readout 消融、Phased medium 等）。
 
 已删除的旧 YAML：`catastrophic.yaml`、`joint_training.yaml`、`frozen_large_weights.yaml`、`langevin.yaml`、`catastrophic_mnist_emnist_probe.yaml`、`catastrophic_mnist_emnist_medium.yaml`、`catastrophic_mnist_emnist_medium_stabilizer_off.yaml`。
 
@@ -861,16 +679,10 @@ python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emni
 python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist.yaml --device auto --dry-run --run-name paper_source_strict_dryrun
 ```
 
-本地中等规模诊断：
+R0 full catastrophic（partition + P1/R3 checkpoint）：
 
 ```bash
-python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist_paper_medium.yaml --device auto --run-name paper_medium_source_port_seed0
-```
-
-SDPM aligned medium：
-
-```bash
-python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist_paper_medium_sdpm.yaml --device cuda --run-name paper_medium_sdpm_aligned_seed0
+python scripts/run_baseline.py --config configs/ngsg/paper_full_partition_seed0.yaml --device cuda --run-name paper_full_partition_seed0
 ```
 
 SDPM-only full（服务器正式）：
@@ -879,24 +691,14 @@ SDPM-only full（服务器正式）：
 python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist_sdpm.yaml --device cuda --run-name paper_full_sdpm_only_seed0
 ```
 
-no-SDPM paired medium：
+Partition 组诊断 full（Task1 后）：
 
 ```bash
-python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist_paper_medium_no_sdpm.yaml --device cuda --run-name paper_medium_no_sdpm_aligned_seed0
+python scripts/eval_partition_group_diagnosis.py \
+  --config configs/ngsg/partition_group_diagnosis_full.yaml --train-task1 --device cuda
 ```
 
-Phased Task2 medium（§0.9）：
-
-```bash
-python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist_paper_medium_phased_task2.yaml --device cuda --run-name phased_task2_medium_seed0
-```
-
-reserve-only / full NGSG medium：
-
-```bash
-python scripts/run_baseline.py --config configs/ngsg/catastrophic_mnist_emnist_paper_medium_reserve_only.yaml --device cuda --run-name paper_medium_reserve_only_seed0
-python scripts/run_baseline.py --config configs/ngsg/catastrophic_mnist_emnist_paper_medium_ngsg.yaml --device cuda --run-name paper_medium_ngsg_seed0
-```
+**已删除：** 全部 medium 运行命令（2026-07-09）。勿再使用 `*medium*` 配置。
 
 重建 S1/S2 feature checkpoint 和 C2 cache：
 
@@ -984,18 +786,17 @@ class   = decision_map[winner_neuron_index]
 - 跑完整 `catastrophic_mnist_emnist.yaml`。
 - 记录 Task1 after Task1、Task1 after Task2、Task2 after Task2、forgetting 和 avg acc。
 
-阶段 B：可解释统计。当前状态：medium no-op 对照已完成，统计路径可作为诊断模块使用；后续只需随新实验继续整理产物。
+阶段 B：可解释统计。统计路径（partition / winner logging）作为诊断模块；**full 上 no-op 待补证**。
 
 - 在 S3 训练中记录 winner id、winner frequency 和 winner label count。
 - 输出 Task 1 后的 `f_i`、`q_i`、`I_i` 分布；当前由 `src/continual/neuron_partition.py` 计算。
 - 生成 stable/shared/reserve/dead neuron partition。
-- 确认统计模块不改变 baseline 学习行为。
-- 已完成 medium no-op 对照：pure baseline、logging-only、logging+partition 三组指标完全一致。
+- 确认统计模块不改变 baseline 学习行为（历史 medium no-op 已删，勿引用）。
 
 阶段 C：方案 B + HTM 与历史 NGSG 路线。当前状态：**HTM 主实现进行中**；SDPM / Phased / reserve 已有结果见 §0 / §0.3 / §0.9。
 
-- ✅ Step 1：partition + Tier A 现象（§0.0）
-- ✅ train–test mismatch 问题刻画（§0.3.1）
+- ✅ Step 1：partition + Tier A 现象（§0.0 full）
+- 🟡 train–test mismatch 问题刻画（§0.3 历史 + §0.0.1 P1）
 - ⬜ Step 2：Role-train（λ）统一配置与 full 主表
 - ⬜ Step 3–4：HTM task memory + group routing
 - ✅ 历史：SDPM（§0）、Phased（§0.9 FAIL）、reserve（§0.3.1 FAIL）
@@ -1080,7 +881,7 @@ class   = decision_map[winner_neuron_index]
 2. 🔴 **P2**：实现 HTM 记忆神经元 + **Acc_task**（可先 static mean 验证分离度）。
 3. 🔴 **P3**：Role-train full vs catastrophic（R0/R1 公平主表，≥3 seed）。
 4. ⬜ **P4**：HTM + group routing 端到端（R2，Acc_task + Acc_class）。
-5. ✅ **P5**：Oracle routing（R3，medium + full，§0.0.2–3）。
+5. ✅ **P5**：Oracle routing（R3，full，§0.0.1）。
 6. ⬜ **P6**：R4 static mean vs R2 HTM 消融。
 
 **收尾**

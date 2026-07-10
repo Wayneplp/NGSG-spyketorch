@@ -6,7 +6,12 @@ from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Sequence, Tuple,
 import torch
 from torch import Tensor, nn
 
-from .occupancy_stats import Task1OccupancyStats, fit_task1_occupancy_stats, max_normalize
+from .occupancy_stats import (
+    Task1OccupancyStats,
+    compute_neuron_weight_importance,
+    fit_task1_occupancy_stats,
+    max_normalize,
+)
 
 if TYPE_CHECKING:
     from .neuron_partition import NeuronPartition
@@ -33,6 +38,9 @@ class SDPMGateConfig:
     source_stage: str = "task1"
     track_drift: bool = True
     random_seed: Optional[int] = None
+    refresh_after_weight_transfer: bool = False
+    inherit_transfer_occupancy: bool = True
+    refresh_weight_importance: bool = True
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "SDPMGateConfig":
@@ -50,6 +58,9 @@ class SDPMGateConfig:
             source_stage=str(config.get("source_stage", "task1")),
             track_drift=bool(config.get("track_drift", True)),
             random_seed=config.get("random_seed"),
+            refresh_after_weight_transfer=bool(config.get("refresh_after_weight_transfer", False)),
+            inherit_transfer_occupancy=bool(config.get("inherit_transfer_occupancy", True)),
+            refresh_weight_importance=bool(config.get("refresh_weight_importance", True)),
         )
 
 
@@ -266,6 +277,64 @@ class SDPMGate:
         gamma = float(config.gamma)
         g_min = float(config.g_min)
         return g_min + (1.0 - g_min) * torch.pow(1.0 - normalized, gamma)
+
+    def refresh_after_weight_transfer(
+        self,
+        model: nn.Module,
+        transfer_pairs: Sequence[Tuple[int, int]],
+    ) -> "SDPMGate":
+        if not self.enabled or self.occupancy is None or not transfer_pairs:
+            return self
+
+        conv3 = getattr(model, "conv3", None)
+        if conv3 is None or not hasattr(conv3, "weight"):
+            return self
+
+        occupancy = self.occupancy
+        f_i = occupancy.f_i.clone()
+        q_i = occupancy.q_i.clone()
+        i_i = occupancy.I_i.clone()
+        dominant_labels = occupancy.dominant_labels.clone()
+
+        num_neurons = int(f_i.numel())
+        inherited = 0
+        if self.config.inherit_transfer_occupancy:
+            for source_idx, target_idx in transfer_pairs:
+                source = int(source_idx)
+                target = int(target_idx)
+                if 0 <= source < num_neurons and 0 <= target < num_neurons:
+                    f_i[target] = f_i[source]
+                    q_i[target] = q_i[source]
+                    dominant_labels[target] = dominant_labels[source]
+                    inherited += 1
+
+        if self.config.refresh_weight_importance:
+            i_i = compute_neuron_weight_importance(
+                conv3.weight.detach(),
+                use_weight_strength=self.config.use_weight_strength,
+            )
+
+        refreshed_occupancy = Task1OccupancyStats(
+            f_i=f_i,
+            q_i=q_i,
+            I_i=i_i,
+            dominant_labels=dominant_labels,
+        )
+        refreshed = type(self).fit_from_occupancy(
+            refreshed_occupancy,
+            self.config,
+            conv3_weight=conv3.weight.detach(),
+            random_seed=self.config.random_seed,
+        )
+        refreshed.drift_stats = dict(self.drift_stats)
+        refreshed.drift_stats.update(
+            {
+                "refresh_after_weight_transfer": 1.0,
+                "transfer_pairs": float(len(transfer_pairs)),
+                "inherited_transfer_occupancy": float(inherited),
+            }
+        )
+        return refreshed
 
     def should_apply(self, stage_name: str) -> bool:
         return self.enabled and stage_name in self.config.apply_stages

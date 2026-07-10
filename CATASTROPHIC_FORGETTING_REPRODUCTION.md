@@ -1,6 +1,8 @@
 # 灾难性遗忘复现状态记录
 
-最后更新：2026-07-02
+最后更新：2026-07-09
+
+> **注意（2026-07-09）：** 仓库已删除全部 `configs/**/*medium*` 与 `published_results/diagnostics/*medium*.json`。下文 medium 段落为**历史日志**，数字**不得**用于论文 claim 或推断 full 行为。权威证据见 README §0.0–0.0.1 与 `实验列表.md`。
 
 本次补充：服务器 2 号完成 SDPM medium 验证和同代码 no-SDPM paired baseline；SDPM gate 已确认能拟合并在 Task2 生效，但当前 SDPM-only 牺牲 Task2 学习，平均精度不优于 no-SDPM。服务器完整 catastrophic baseline 仍以 `published_results/baseline/paper_ch4_catastrophic_optimized_winnerlog_seed0.json` 作为当前 NGSG 统计基线参考。
 

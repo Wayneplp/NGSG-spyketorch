@@ -74,6 +74,7 @@ class PaperMozafariMNIST2018(nn.Module):
 
         self.ctx: Dict[str, Any] = {"input_spikes": None, "potentials": None, "output_spikes": None, "winners": None}
         self.s3_potential_boost: Optional[Tensor] = None
+        self.s3_wta_allow_mask: Optional[Tensor] = None
         self.spk_cnt1 = 0
         self.spk_cnt2 = 0
 
@@ -168,6 +169,7 @@ class PaperMozafariMNIST2018(nn.Module):
             spk_in = sf.pad(sf.pooling(spk, 3, 3), (2, 2, 2, 2))
             pot = self.conv3(spk_in)
             pot = self._apply_s3_potential_boost(pot)
+            pot = self._apply_s3_wta_mask(pot)
             spk = sf.fire(pot)
             winners = sf.get_k_winners(pot, 1, self.r3, spk)
             self._store_context(spk_in, pot, spk, winners)
@@ -183,6 +185,7 @@ class PaperMozafariMNIST2018(nn.Module):
             return spk, pot
         pot = self.conv3(sf.pad(sf.pooling(spk, 3, 3), (2, 2, 2, 2)))
         pot = self._apply_s3_potential_boost(pot)
+        pot = self._apply_s3_wta_mask(pot)
         spk = sf.fire(pot)
         winners = sf.get_k_winners(pot, 1, self.r3, spk)
         return self._decision_from_winners(winners)
@@ -206,6 +209,37 @@ class PaperMozafariMNIST2018(nn.Module):
 
     def clear_s3_potential_boost(self) -> None:
         self.s3_potential_boost = None
+
+    def set_s3_wta_allow_mask(self, allow_mask: Optional[Tensor]) -> None:
+        if allow_mask is None:
+            self.s3_wta_allow_mask = None
+            return
+        self.s3_wta_allow_mask = allow_mask.detach().bool().to(next(self.parameters()).device)
+
+    def clear_s3_wta_allow_mask(self) -> None:
+        self.s3_wta_allow_mask = None
+
+    def _apply_s3_wta_mask(self, pot: Tensor) -> Tensor:
+        allow_mask = self.s3_wta_allow_mask
+        if allow_mask is None or allow_mask.numel() == 0:
+            return pot
+        allow_mask = allow_mask.to(device=pot.device)
+        masked = pot.clone()
+        closed = ~allow_mask
+        if not bool(closed.any()):
+            return pot
+        neg_inf = torch.tensor(float("-inf"), device=pot.device, dtype=pot.dtype)
+        if pot.ndim == 3 and int(pot.shape[0]) == int(allow_mask.numel()):
+            masked[closed] = neg_inf
+            return masked
+        if pot.ndim == 4:
+            if int(pot.shape[0]) == int(allow_mask.numel()):
+                masked[closed] = neg_inf
+                return masked
+            if int(pot.shape[1]) == int(allow_mask.numel()):
+                masked[:, closed] = neg_inf
+                return masked
+        return pot
 
     def _apply_s3_potential_boost(self, pot: Tensor) -> Tensor:
         boost = self.s3_potential_boost
@@ -266,6 +300,7 @@ class PaperMozafariMNIST2018(nn.Module):
         s3_input = s3_input.float().to(next(self.parameters()).device)
         pot = self.conv3(s3_input)
         pot = self._apply_s3_potential_boost(pot)
+        pot = self._apply_s3_wta_mask(pot)
         spk = sf.fire(pot)
         winners = sf.get_k_winners(pot, 1, self.r3, spk)
         self._store_context(s3_input, pot, spk, winners)
@@ -276,7 +311,14 @@ class PaperMozafariMNIST2018(nn.Module):
         """Eval-mode forward through S3, returning conv3 potentials."""
         if image.ndim == 3 or (image.ndim == 4 and image.shape[0] == 1):
             image = image.squeeze(0) if image.ndim == 4 else image
-        input_spikes = self.encode(image)
+            input_spikes = self.encode(image)
+        elif image.ndim == 4 and int(image.shape[0]) == int(self.config.time_steps):
+            # Pre-encoded temporal spikes from paper preprocess cache.
+            input_spikes = image
+        else:
+            raise ValueError(
+                "Expected raw image CxHxW or pre-encoded temporal spikes TxCxHxW."
+            )
         input_spikes = sf.pad(input_spikes.float(), (2, 2, 2, 2), 0)
         pot = self.conv1(input_spikes)
         spk, pot = sf.fire(pot, self.conv1_t, True)

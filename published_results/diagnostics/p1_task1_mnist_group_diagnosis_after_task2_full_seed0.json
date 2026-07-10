@@ -2,7 +2,8 @@
   "run_name": "paper_full_partition_seed0",
   "source": "server_r3_oracle_group_routing",
   "checkpoint_stage": "task2",
-  "test_task": "task2",
+  "test_task": "task1",
+  "test_task_name": "initial_mnist_digits",
   "role_counts": {
     "stable": 60,
     "shared": 60,
@@ -10,30 +11,31 @@
     "dead": 0
   },
   "embedded_metrics": {
-    "task2_after_task2_trainer_evaluate": 0.75425
+    "task1_after_task1_trainer_evaluate": 0.9314,
+    "task1_after_task2_trainer_evaluate": 0.4754
   },
-  "task2_test_after_task2": {
+  "task1_test_after_task2": {
     "all_200": {
       "label": "all 200 neurons (baseline)",
-      "accuracy": 0.704375,
-      "correct": 5635.0,
-      "total": 8000.0,
+      "accuracy": 0.3488,
+      "correct": 3488.0,
+      "total": 10000.0,
       "silent": 0.0,
       "delta_vs_all_200_pp": 0.0,
       "role_win_fractions": {
-        "stable": 0.0895,
-        "shared": 0.1845,
-        "reserve": 0.726,
+        "stable": 0.2921,
+        "shared": 0.2608,
+        "reserve": 0.4471,
         "dead": 0.0
       }
     },
     "stable_only": {
       "label": "6.1 stable-only",
-      "accuracy": 0.192875,
-      "correct": 1543.0,
-      "total": 8000.0,
+      "accuracy": 0.6375,
+      "correct": 6375.0,
+      "total": 10000.0,
       "silent": 0.0,
-      "delta_vs_all_200_pp": -51.15,
+      "delta_vs_all_200_pp": 28.87,
       "role_win_fractions": {
         "stable": 1.0,
         "shared": 0.0,
@@ -43,11 +45,11 @@
     },
     "shared_only": {
       "label": "6.1 shared-only",
-      "accuracy": 0.277125,
-      "correct": 2217.0,
-      "total": 8000.0,
+      "accuracy": 0.4919,
+      "correct": 4919.0,
+      "total": 10000.0,
       "silent": 0.0,
-      "delta_vs_all_200_pp": -42.73,
+      "delta_vs_all_200_pp": 14.31,
       "role_win_fractions": {
         "stable": 0.0,
         "shared": 1.0,
@@ -57,11 +59,11 @@
     },
     "reserve_only": {
       "label": "6.1 reserve-only",
-      "accuracy": 0.571375,
-      "correct": 4571.0,
-      "total": 8000.0,
+      "accuracy": 0.0917,
+      "correct": 917.0,
+      "total": 10000.0,
       "silent": 0.0,
-      "delta_vs_all_200_pp": -13.3,
+      "delta_vs_all_200_pp": -25.71,
       "role_win_fractions": {
         "stable": 0.0,
         "shared": 0.0,
@@ -71,46 +73,46 @@
     },
     "mask_stable": {
       "label": "6.2 mask-stable",
-      "accuracy": 0.66575,
-      "correct": 5326.0,
-      "total": 8000.0,
+      "accuracy": 0.2719,
+      "correct": 2719.0,
+      "total": 10000.0,
       "silent": 0.0,
-      "delta_vs_all_200_pp": -3.86,
+      "delta_vs_all_200_pp": -7.69,
       "role_win_fractions": {
         "stable": 0.0,
-        "shared": 0.216375,
-        "reserve": 0.783625,
+        "shared": 0.4574,
+        "reserve": 0.5426,
         "dead": 0.0
       }
     },
     "mask_shared": {
       "label": "6.2 mask-shared",
-      "accuracy": 0.643125,
-      "correct": 5145.0,
-      "total": 8000.0,
+      "accuracy": 0.3448,
+      "correct": 3448.0,
+      "total": 10000.0,
       "silent": 0.0,
-      "delta_vs_all_200_pp": -6.13,
+      "delta_vs_all_200_pp": -0.4,
       "role_win_fractions": {
-        "stable": 0.107625,
+        "stable": 0.4315,
         "shared": 0.0,
-        "reserve": 0.892375,
+        "reserve": 0.5685,
         "dead": 0.0
       }
     },
     "mask_reserve": {
       "label": "6.2 mask-reserve",
-      "accuracy": 0.305625,
-      "correct": 2445.0,
-      "total": 8000.0,
+      "accuracy": 0.5566,
+      "correct": 5566.0,
+      "total": 10000.0,
       "silent": 0.0,
-      "delta_vs_all_200_pp": -39.88,
+      "delta_vs_all_200_pp": 20.78,
       "role_win_fractions": {
-        "stable": 0.311875,
-        "shared": 0.688125,
+        "stable": 0.5267,
+        "shared": 0.4733,
         "reserve": 0.0,
         "dead": 0.0
       }
     }
   },
-  "note": "Diagnosis path (forward_potentials); EMNIST test n=8000. Synced from server r3_oracle_group_routing.json (2026-07-09). trainer.evaluate Task2=75.43%."
+  "note": "Task2 训完后在 MNIST 测试集上的七组诊断（诊断路径 forward_potentials）。分区标签来自 Task1 后的 f_i。与 trainer.evaluate 主表 Task1 after T2=47.54% 不同路径。"
 }

@@ -175,6 +175,7 @@ class ReserveActivation:
     stats: Dict[str, float] = field(default_factory=dict)
     _generator: Optional[torch.Generator] = field(default=None, repr=False)
     _decision_map_recruit_counts: Dict[Tuple[int, int], int] = field(default_factory=dict, repr=False)
+    _weight_transfer_pairs: List[Tuple[int, int]] = field(default_factory=list, repr=False)
 
     @property
     def enabled(self) -> bool:
@@ -263,31 +264,39 @@ class ReserveActivation:
         scores = self.partition.combined_score()
         sigma = float(self.config.weight_transfer_noise_sigma)
         transferred = 0
+        transfer_pairs: List[Tuple[int, int]] = []
 
-        for class_idx in range(num_classes):
-            if self.config.weight_transfer_class_local:
-                block = list(self._class_block(class_idx, num_neurons))
-            else:
-                block = list(range(num_neurons))
+        with torch.no_grad():
+            for class_idx in range(num_classes):
+                if self.config.weight_transfer_class_local:
+                    block = list(self._class_block(class_idx, num_neurons))
+                else:
+                    block = list(range(num_neurons))
 
-            source_indices = [i for i in block if bool(source_mask[i].item())]
-            target_indices = [i for i in block if bool(target_mask[i].item())]
+                source_indices = [i for i in block if bool(source_mask[i].item())]
+                target_indices = [i for i in block if bool(target_mask[i].item())]
 
-            if not source_indices or not target_indices:
-                continue
+                if not source_indices or not target_indices:
+                    continue
 
-            best_source = source_indices[int(scores[source_indices].argmax().item())]
-            source_weight = weight[best_source].clone()
+                best_source = source_indices[int(scores[source_indices].argmax().item())]
+                source_weight = weight[best_source].detach().clone()
 
-            for target_idx in target_indices:
-                noise = torch.randn_like(source_weight) * sigma
-                weight[target_idx] = source_weight + noise
-                transferred += 1
+                for target_idx in target_indices:
+                    noise = torch.randn_like(source_weight) * sigma
+                    weight[target_idx].copy_(source_weight + noise)
+                    transfer_pairs.append((int(best_source), int(target_idx)))
+                    transferred += 1
 
+        self._weight_transfer_pairs = transfer_pairs
         self.stats["weight_transfer_source_count"] = float(source_mask.sum().item())
         self.stats["weight_transfer_target_count"] = float(target_mask.sum().item())
         self.stats["weight_transfer_transferred"] = float(transferred)
         self.stats["weight_transfer_noise_sigma"] = sigma
+
+    def weight_transfer_pairs(self) -> Tuple[Tuple[int, int], ...]:
+        """Return (source_idx, target_idx) pairs from the last weight-transfer step."""
+        return tuple(self._weight_transfer_pairs)
 
     def _class_block(self, class_idx: int, num_neurons: int) -> range:
         start = int(class_idx) * self.neurons_per_class
@@ -563,6 +572,7 @@ class ReserveActivation:
                 "transferred": float(self.stats.get("weight_transfer_transferred", 0.0)),
                 "unavailable": float(self.stats.get("weight_transfer_unavailable", 0.0)),
                 "no_candidates": float(self.stats.get("weight_transfer_no_candidates", 0.0)),
+                "pair_count": float(len(self._weight_transfer_pairs)),
             },
             "config": asdict(self.config),
             "novelty_gate": self.novelty_gate.summarize(),

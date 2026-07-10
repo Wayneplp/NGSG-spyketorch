@@ -1,0 +1,13 @@
+{
+  "run_name": "paper_full_reserve_wt_sdpm_sigma005_seed0",
+  "source": "server_sync",
+  "metrics": {
+    "task1_after_task1": 0.9303,
+    "task1_after_task2": 0.4625,
+    "task2_after_task2": 0.666375,
+    "forgetting": 0.4678,
+    "avg_acc": 0.5644375
+  },
+  "method": "catastrophic",
+  "seed": 0
+}

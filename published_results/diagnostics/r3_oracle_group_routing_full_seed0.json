@@ -2,7 +2,12 @@
   "run_name": "paper_full_partition_seed0",
   "source": "server",
   "checkpoint_stage": "task2",
-  "role_counts": {"stable": 60, "shared": 60, "reserve": 80, "dead": 0},
+  "role_counts": {
+    "stable": 60,
+    "shared": 60,
+    "reserve": 80,
+    "dead": 0
+  },
   "embedded_metrics": {
     "task1_after_task1": 0.9314,
     "task1_after_task2": 0.4754,
@@ -21,12 +26,23 @@
     "avg_oracle": 0.611175,
     "avg_delta_pp": 8.46
   },
-  "p1_task2_emnist": {
-    "all_200": 0.704375,
-    "mask_stable": 0.66575,
-    "mask_stable_delta_pp": -3.86,
-    "reserve_only": 0.571375,
-    "reserve_winner_fraction": 0.726
+  "task1_group_diagnosis": {
+    "all_200": {"accuracy": 0.3488, "role_win_fractions": {"stable": 0.2921, "shared": 0.2608, "reserve": 0.4471}},
+    "stable_only": {"accuracy": 0.6375},
+    "shared_only": {"accuracy": 0.4919},
+    "reserve_only": {"accuracy": 0.0917},
+    "mask_stable": {"accuracy": 0.2719},
+    "mask_shared": {"accuracy": 0.3448},
+    "mask_reserve": {"accuracy": 0.5566}
   },
-  "note": "Group-diagnosis natural WTA uses forward_potentials path; numbers differ from trainer.evaluate in result.json."
+  "task2_group_diagnosis": {
+    "all_200": {"accuracy": 0.704375, "role_win_fractions": {"stable": 0.0895, "shared": 0.1845, "reserve": 0.726}},
+    "stable_only": {"accuracy": 0.192875},
+    "shared_only": {"accuracy": 0.277125},
+    "reserve_only": {"accuracy": 0.571375},
+    "mask_stable": {"accuracy": 0.66575},
+    "mask_shared": {"accuracy": 0.643125},
+    "mask_reserve": {"accuracy": 0.305625}
+  },
+  "note": "Full task1/task2 group diagnosis synced from server (2026-07-09). Diagnosis path uses forward_potentials; differs from trainer.evaluate."
 }

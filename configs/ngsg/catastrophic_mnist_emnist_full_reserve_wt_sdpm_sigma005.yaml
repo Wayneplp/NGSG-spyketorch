@@ -1,5 +1,6 @@
-# Medium-scale reserve-only ablation with explicit decision-map alignment.
-# Isolates proposal E: update decision_map after repeated reserve recruitment.
+# Full-scale WT + SDPM reserve protection experiment.
+# Before Task2, reserve neurons inherit stable-neuron conv3 weights with sigma=0.05 noise.
+# SDPM is then refreshed so transferred reserve neurons inherit the source stable old-task occupancy evidence.
 method: catastrophic
 seed: 0
 run_name: null
@@ -23,8 +24,7 @@ tasks:
         normalize: false
       labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
       mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-      train_samples_per_label: 100
-      test_samples_per_label: 100
+      train_samples_per_label: 2400
     - name: subsequent_emnist_capitals_ABDEGHNQRS
       dataset:
         dataset_name: emnist
@@ -34,9 +34,10 @@ tasks:
         fix_orientation: true
       labels: [1, 2, 4, 5, 7, 8, 14, 17, 18, 19]
       mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-      train_samples_per_label: 100
-      test_samples_per_label: 100
-  task_order: [0, 1]
+      train_samples_per_label: 2400
+  task_order:
+    - 0
+    - 1
 
 model:
   architecture: paper_spyketorch
@@ -63,7 +64,21 @@ model:
 
 continual:
   sdpm_gate:
-    enabled: false
+    enabled: true
+    source_stage: task1
+    apply_stages: [task2]
+    importance:
+      use_winner_frequency: true
+      use_selectivity: true
+      use_weight_strength: true
+    g_min: 0.05
+    gamma: 1.0
+    protect_top_fraction: 0.3
+    random_protection: false
+    track_drift: true
+    refresh_after_weight_transfer: true
+    inherit_transfer_occupancy: true
+    refresh_weight_importance: true
   neuron_partition:
     enabled: true
     f_stable_percentile: 0.70
@@ -78,17 +93,22 @@ continual:
     use_class_local: true
     recruit_roles: [reserve]
     random_recruitment: false
-    update_decision_map: true
-    decision_map_update_threshold: 3
+    reroute_updates: false
+    homeostatic_boost: false
+    weight_transfer: true
+    weight_transfer_source_roles: [stable]
+    weight_transfer_target_roles: [reserve]
+    weight_transfer_noise_sigma: 0.05
+    weight_transfer_class_local: true
 
 train:
-  batch_size: 1000
-  s3_cached_batch_size: 256
+  batch_size: 24000
+  s3_cached_batch_size: 1024
   num_workers: 0
   pin_memory: true
   learning_rule: paper_source_rstdp
-  num_epochs_task1: 50
-  num_epochs_task2: 10
+  num_epochs_task1: 600
+  num_epochs_task2: 100
   s1_stdp_epochs_task1: 2
   s2_stdp_epochs_task1: 4
   s1_stdp_epochs_task2: 2
@@ -96,7 +116,7 @@ train:
   paper_adaptive_int: 0.5
   paper_adaptive_min: 0.0
   reset_learning_rates_each_stage: true
-  progress_interval_samples: 1000
+  progress_interval_samples: 2400
   winner_frequency_log:
     enabled: true
     top_k: 10
@@ -111,7 +131,7 @@ train:
   c2_feature_cache:
     enabled: true
     root_dir: data/features/c2
-    batch_size: 256
+    batch_size: 1024
     preload: true
     preload_pin_memory: false
     pin_memory: true
