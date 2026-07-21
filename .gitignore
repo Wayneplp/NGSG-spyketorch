@@ -27,6 +27,7 @@ data/
 SKILL/
 SKILL.zip
 CATASTROPHIC_FORGETTING_REPRODUCTION.pdf
+.wheel_cache/
 
 # Keep placeholder files if we add them later
 !experiments/.gitkeep

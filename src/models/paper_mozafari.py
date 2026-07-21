@@ -111,21 +111,46 @@ class PaperMozafariMNIST2018(nn.Module):
             image = image.unsqueeze(0)
         if image.ndim != 3:
             raise ValueError("Expected single image tensor with shape CxHxW.")
-        image = image.to(next(self.parameters()).device)
-        if image.max() <= 1.0:
-            image = image * 255.0
-        image = image.unsqueeze(0).float()
-        filtered = self.source_filter(image)
-        normalized = sf.local_normalization(filtered, self.config.local_normalization_radius)
-        if not torch.any(normalized > 0):
-            _, channels, height, width = normalized.shape
-            return torch.zeros(
-                (self.config.time_steps, channels, height, width),
-                dtype=torch.uint8,
-                device=normalized.device,
-            )
-        temporal_image = self.temporal_transform(normalized)
-        return temporal_image.sign().byte().to(next(self.parameters()).device)
+        batch = self.encode_batch(image.unsqueeze(0))
+        return batch[0]
+
+    def encode_batch(self, images: Tensor) -> Tensor:
+        """Encode a batch of images ``B×C×H×W`` into temporal spike tensors on the model device.
+
+        SpykeTorch ``Filter`` / ``local_normalization`` treat dim0 as a time axis for a
+        single sample, so each image is encoded independently with minibatch=1.
+        """
+        if images.ndim == 3:
+            images = images.unsqueeze(0)
+        if images.ndim != 4:
+            raise ValueError("Expected image batch with shape BxCxHxW.")
+        device = next(self.parameters()).device
+        if self.source_filter.kernels.device != device:
+            self.source_filter.kernels = self.source_filter.kernels.to(device)
+        if isinstance(self.source_filter.thresholds, torch.Tensor) and self.source_filter.thresholds.device != device:
+            self.source_filter.thresholds = self.source_filter.thresholds.to(device)
+        images = images.to(device, non_blocking=device.type == "cuda")
+        if images.max() <= 1.0:
+            images = images * 255.0
+        images = images.float()
+        outputs = []
+        for index in range(int(images.shape[0])):
+            sample = images[index : index + 1]
+            filtered = self.source_filter(sample)
+            normalized = sf.local_normalization(filtered, self.config.local_normalization_radius)
+            if not torch.any(normalized > 0):
+                _, channels, height, width = normalized.shape
+                outputs.append(
+                    torch.zeros(
+                        (self.config.time_steps, channels, height, width),
+                        dtype=torch.uint8,
+                        device=device,
+                    )
+                )
+                continue
+            temporal_image = self.temporal_transform(normalized)
+            outputs.append(temporal_image.sign().byte())
+        return torch.stack(outputs, dim=0)
 
     def forward(self, input: Tensor, max_layer: int = 3) -> Any:  # type: ignore[override]
         if input.ndim == 3 or (input.ndim == 4 and input.shape[0] == 1):
@@ -310,7 +335,11 @@ class PaperMozafariMNIST2018(nn.Module):
         """Run only S3/C3/classification from a cached C2 pooled feature tensor."""
         if s3_input.ndim == 5 and s3_input.shape[0] == 1:
             s3_input = s3_input.squeeze(0)
-        s3_input = s3_input.float().to(next(self.parameters()).device)
+        model_device = next(self.parameters()).device
+        if s3_input.device != model_device:
+            s3_input = s3_input.float().to(model_device, non_blocking=model_device.type == "cuda")
+        elif s3_input.dtype != torch.float32:
+            s3_input = s3_input.float()
         pot = self.conv3(s3_input)
         pot = self._apply_s3_potential_boost(pot)
         pot, spk = self._s3_wta_inputs(pot)
