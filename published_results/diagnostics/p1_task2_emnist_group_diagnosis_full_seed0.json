@@ -1,0 +1,116 @@
+{
+  "run_name": "paper_full_partition_seed0",
+  "source": "server_r3_oracle_group_routing",
+  "checkpoint_stage": "task2",
+  "test_task": "task2",
+  "role_counts": {
+    "stable": 60,
+    "shared": 60,
+    "reserve": 80,
+    "dead": 0
+  },
+  "embedded_metrics": {
+    "task2_after_task2_trainer_evaluate": 0.75425
+  },
+  "task2_test_after_task2": {
+    "all_200": {
+      "label": "all 200 neurons (baseline)",
+      "accuracy": 0.704375,
+      "correct": 5635.0,
+      "total": 8000.0,
+      "silent": 0.0,
+      "delta_vs_all_200_pp": 0.0,
+      "role_win_fractions": {
+        "stable": 0.0895,
+        "shared": 0.1845,
+        "reserve": 0.726,
+        "dead": 0.0
+      }
+    },
+    "stable_only": {
+      "label": "6.1 stable-only",
+      "accuracy": 0.192875,
+      "correct": 1543.0,
+      "total": 8000.0,
+      "silent": 0.0,
+      "delta_vs_all_200_pp": -51.15,
+      "role_win_fractions": {
+        "stable": 1.0,
+        "shared": 0.0,
+        "reserve": 0.0,
+        "dead": 0.0
+      }
+    },
+    "shared_only": {
+      "label": "6.1 shared-only",
+      "accuracy": 0.277125,
+      "correct": 2217.0,
+      "total": 8000.0,
+      "silent": 0.0,
+      "delta_vs_all_200_pp": -42.73,
+      "role_win_fractions": {
+        "stable": 0.0,
+        "shared": 1.0,
+        "reserve": 0.0,
+        "dead": 0.0
+      }
+    },
+    "reserve_only": {
+      "label": "6.1 reserve-only",
+      "accuracy": 0.571375,
+      "correct": 4571.0,
+      "total": 8000.0,
+      "silent": 0.0,
+      "delta_vs_all_200_pp": -13.3,
+      "role_win_fractions": {
+        "stable": 0.0,
+        "shared": 0.0,
+        "reserve": 1.0,
+        "dead": 0.0
+      }
+    },
+    "mask_stable": {
+      "label": "6.2 mask-stable",
+      "accuracy": 0.66575,
+      "correct": 5326.0,
+      "total": 8000.0,
+      "silent": 0.0,
+      "delta_vs_all_200_pp": -3.86,
+      "role_win_fractions": {
+        "stable": 0.0,
+        "shared": 0.216375,
+        "reserve": 0.783625,
+        "dead": 0.0
+      }
+    },
+    "mask_shared": {
+      "label": "6.2 mask-shared",
+      "accuracy": 0.643125,
+      "correct": 5145.0,
+      "total": 8000.0,
+      "silent": 0.0,
+      "delta_vs_all_200_pp": -6.13,
+      "role_win_fractions": {
+        "stable": 0.107625,
+        "shared": 0.0,
+        "reserve": 0.892375,
+        "dead": 0.0
+      }
+    },
+    "mask_reserve": {
+      "label": "6.2 mask-reserve",
+      "accuracy": 0.305625,
+      "correct": 2445.0,
+      "total": 8000.0,
+      "silent": 0.0,
+      "delta_vs_all_200_pp": -39.88,
+      "role_win_fractions": {
+        "stable": 0.311875,
+        "shared": 0.688125,
+        "reserve": 0.0,
+        "dead": 0.0
+      }
+    }
+  },
+  "note": "Diagnosis path (forward_potentials); EMNIST test n=8000. Synced from server r3_oracle_group_routing.json (2026-07-09). trainer.evaluate Task2=75.43%."
+}

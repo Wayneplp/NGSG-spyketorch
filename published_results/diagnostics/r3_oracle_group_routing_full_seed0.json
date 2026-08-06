@@ -1,0 +1,48 @@
+{
+  "run_name": "paper_full_partition_seed0",
+  "source": "server",
+  "checkpoint_stage": "task2",
+  "role_counts": {
+    "stable": 60,
+    "shared": 60,
+    "reserve": 80,
+    "dead": 0
+  },
+  "embedded_metrics": {
+    "task1_after_task1": 0.9314,
+    "task1_after_task2": 0.4754,
+    "task2_after_task2": 0.75425,
+    "forgetting_pp": 45.6,
+    "avg_acc": 0.614825
+  },
+  "r3_oracle_routing": {
+    "task1_natural_all_200": 0.3488,
+    "task1_oracle_mask_reserve": 0.5566,
+    "task1_delta_pp": 20.78,
+    "task2_natural_all_200": 0.704375,
+    "task2_oracle_mask_stable": 0.66575,
+    "task2_delta_pp": -3.86,
+    "avg_natural": 0.5265875,
+    "avg_oracle": 0.611175,
+    "avg_delta_pp": 8.46
+  },
+  "task1_group_diagnosis": {
+    "all_200": {"accuracy": 0.3488, "role_win_fractions": {"stable": 0.2921, "shared": 0.2608, "reserve": 0.4471}},
+    "stable_only": {"accuracy": 0.6375},
+    "shared_only": {"accuracy": 0.4919},
+    "reserve_only": {"accuracy": 0.0917},
+    "mask_stable": {"accuracy": 0.2719},
+    "mask_shared": {"accuracy": 0.3448},
+    "mask_reserve": {"accuracy": 0.5566}
+  },
+  "task2_group_diagnosis": {
+    "all_200": {"accuracy": 0.704375, "role_win_fractions": {"stable": 0.0895, "shared": 0.1845, "reserve": 0.726}},
+    "stable_only": {"accuracy": 0.192875},
+    "shared_only": {"accuracy": 0.277125},
+    "reserve_only": {"accuracy": 0.571375},
+    "mask_stable": {"accuracy": 0.66575},
+    "mask_shared": {"accuracy": 0.643125},
+    "mask_reserve": {"accuracy": 0.305625}
+  },
+  "note": "Full task1/task2 group diagnosis synced from server (2026-07-09). Diagnosis path uses forward_potentials; differs from trainer.evaluate."
+}

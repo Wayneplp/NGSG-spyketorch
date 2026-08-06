@@ -1,18 +1,8 @@
-# Paper-source catastrophic forgetting baseline for
-# "Continuous Learning of Spiking Networks Trained with Local Rules".
-#
-# Protocol from the paper/Table 1:
-# 1. Initial training on MNIST digits.
-# 2. Subsequent training on EMNIST capital letters A, B, D, E, G, H, N, Q, R, S.
-# 3. MNIST data are not used during subsequent EMNIST training.
-# 4. Report initial MNIST, subsequent MNIST retention, and subsequent EMNIST.
-#
-# Current implementation: direct project port of the author's
-# dmitryanton68/continuous_learning MozafariMNIST2018 notebooks. It uses the
-# official SpykeTorch package and keeps the source conv/STDP/anti-STDP settings.
+# Full paper-scale catastrophic run with partition + saved Task2 checkpoint
+# for P1/R3 oracle group routing at full scale.
 method: catastrophic
 seed: 0
-run_name: null
+run_name: paper_full_partition_seed0
 
 data:
   dataset_name: paper_mnist_emnist
@@ -41,14 +31,10 @@ tasks:
         data_root: data/emnist
         normalize: false
         fix_orientation: true
-      # torchvision EMNIST letters are 1-indexed: A=1, B=2, D=4, E=5,
-      # G=7, H=8, N=14, Q=17, R=18, S=19. Map them onto 10 output groups.
       labels: [1, 2, 4, 5, 7, 8, 14, 17, 18, 19]
       mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
       train_samples_per_label: 2400
-  task_order:
-    - 0
-    - 1
+  task_order: [0, 1]
 
 model:
   architecture: paper_spyketorch
@@ -81,17 +67,17 @@ continual:
     q_stable_min: 0.60
     importance:
       use_weight_strength: true
+  sdpm_gate:
+    enabled: false
+  reserve_activation:
+    enabled: false
 
 train:
-  # The source notebooks train one large tensor/DataLoader batch per epoch.
   batch_size: 24000
-  # C2/S3-input cache tensors are much larger than raw image samples; keep this smaller to avoid GPU OOM.
   s3_cached_batch_size: 1024
   num_workers: 0
   pin_memory: true
   learning_rule: paper_source_rstdp
-  # Paper-reported long run: MNIST initial training uses 600 epochs; subsequent
-  # EMNIST trains S1 for 2 epochs, S2 for 4 epochs, and S3 R-STDP for 100 epochs.
   num_epochs_task1: 600
   num_epochs_task2: 100
   s1_stdp_epochs_task1: 2
@@ -117,11 +103,11 @@ train:
     enabled: true
     root_dir: data/features/c2
     batch_size: 1024
-    # Keep the per-sample .pt cache in RAM across S3 epochs on high-memory servers.
     preload: true
     preload_pin_memory: false
     pin_memory: true
     num_workers: 0
+
 eval:
   batch_size: 1000
   pin_memory: true
@@ -135,3 +121,4 @@ eval:
 output:
   root_dir: experiments
   summary_csv: results/baseline_summary.csv
+  save_task2_model: true

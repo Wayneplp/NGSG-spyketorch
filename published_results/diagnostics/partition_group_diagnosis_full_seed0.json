@@ -1,0 +1,104 @@
+{
+  "run_name": "partition_group_diagnosis_full_seed0",
+  "checkpoint_stage": "task1",
+  "role_counts": {
+    "reserve": 80,
+    "shared": 60,
+    "stable": 60,
+    "dead": 0
+  },
+  "embedded_task1_accuracy": 0.9314,
+  "task1_test_after_task1": {
+    "all_200": {
+      "label": "all 200 neurons (baseline)",
+      "accuracy": 0.8969,
+      "correct": 8969.0,
+      "total": 10000.0,
+      "silent": 0.0,
+      "role_win_fractions": {
+        "stable": 0.7486,
+        "shared": 0.2352,
+        "reserve": 0.0162,
+        "dead": 0.0
+      }
+    },
+    "stable_only": {
+      "label": "6.1 stable-only",
+      "accuracy": 0.8656,
+      "correct": 8656.0,
+      "total": 10000.0,
+      "silent": 0.0,
+      "role_win_fractions": {
+        "stable": 1.0,
+        "shared": 0.0,
+        "reserve": 0.0,
+        "dead": 0.0
+      }
+    },
+    "shared_only": {
+      "label": "6.1 shared-only",
+      "accuracy": 0.7731,
+      "correct": 7731.0,
+      "total": 10000.0,
+      "silent": 0.0,
+      "role_win_fractions": {
+        "stable": 0.0,
+        "shared": 1.0,
+        "reserve": 0.0,
+        "dead": 0.0
+      }
+    },
+    "reserve_only": {
+      "label": "6.1 reserve-only",
+      "accuracy": 0.3202,
+      "correct": 3202.0,
+      "total": 10000.0,
+      "silent": 0.0,
+      "role_win_fractions": {
+        "stable": 0.0,
+        "shared": 0.0,
+        "reserve": 1.0,
+        "dead": 0.0
+      }
+    },
+    "mask_stable": {
+      "label": "6.2 mask-stable",
+      "accuracy": 0.7778,
+      "correct": 7778.0,
+      "total": 10000.0,
+      "silent": 0.0,
+      "role_win_fractions": {
+        "stable": 0.0,
+        "shared": 0.924,
+        "reserve": 0.076,
+        "dead": 0.0
+      }
+    },
+    "mask_shared": {
+      "label": "6.2 mask-shared",
+      "accuracy": 0.8647,
+      "correct": 8647.0,
+      "total": 10000.0,
+      "silent": 0.0,
+      "role_win_fractions": {
+        "stable": 0.9711,
+        "shared": 0.0,
+        "reserve": 0.0289,
+        "dead": 0.0
+      }
+    },
+    "mask_reserve": {
+      "label": "6.2 mask-reserve",
+      "accuracy": 0.8969,
+      "correct": 8969.0,
+      "total": 10000.0,
+      "silent": 0.0,
+      "role_win_fractions": {
+        "stable": 0.7586,
+        "shared": 0.2414,
+        "reserve": 0.0,
+        "dead": 0.0
+      }
+    }
+  }
+}

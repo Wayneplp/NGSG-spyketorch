@@ -1,15 +1,6 @@
-# Paper-source catastrophic forgetting baseline for
-# "Continuous Learning of Spiking Networks Trained with Local Rules".
-#
-# Protocol from the paper/Table 1:
-# 1. Initial training on MNIST digits.
-# 2. Subsequent training on EMNIST capital letters A, B, D, E, G, H, N, Q, R, S.
-# 3. MNIST data are not used during subsequent EMNIST training.
-# 4. Report initial MNIST, subsequent MNIST retention, and subsequent EMNIST.
-#
-# Current implementation: direct project port of the author's
-# dmitryanton68/continuous_learning MozafariMNIST2018 notebooks. It uses the
-# official SpykeTorch package and keeps the source conv/STDP/anti-STDP settings.
+# Full-scale WT + SDPM reserve protection experiment.
+# Before Task2, reserve neurons inherit stable-neuron conv3 weights with sigma=0.05 noise.
+# SDPM is then refreshed so transferred reserve neurons inherit the source stable old-task occupancy evidence.
 method: catastrophic
 seed: 0
 run_name: null
@@ -41,8 +32,6 @@ tasks:
         data_root: data/emnist
         normalize: false
         fix_orientation: true
-      # torchvision EMNIST letters are 1-indexed: A=1, B=2, D=4, E=5,
-      # G=7, H=8, N=14, Q=17, R=18, S=19. Map them onto 10 output groups.
       labels: [1, 2, 4, 5, 7, 8, 14, 17, 18, 19]
       mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
       train_samples_per_label: 2400
@@ -55,9 +44,9 @@ model:
   time_steps: 15
   num_classes: 10
   neurons_per_class: 20
+  s3_neurons: 200
   s1_maps: 30
   s2_maps: 250
-  s3_neurons: 200
   conv1_kernel: 5
   conv2_kernel: 3
   conv3_kernel: 5
@@ -74,6 +63,22 @@ model:
   local_normalization_radius: 8
 
 continual:
+  sdpm_gate:
+    enabled: true
+    source_stage: task1
+    apply_stages: [task2]
+    importance:
+      use_winner_frequency: true
+      use_selectivity: true
+      use_weight_strength: true
+    g_min: 0.05
+    gamma: 1.0
+    protect_top_fraction: 0.3
+    random_protection: false
+    track_drift: true
+    refresh_after_weight_transfer: true
+    inherit_transfer_occupancy: true
+    refresh_weight_importance: true
   neuron_partition:
     enabled: true
     f_stable_percentile: 0.70
@@ -81,17 +86,27 @@ continual:
     q_stable_min: 0.60
     importance:
       use_weight_strength: true
+  reserve_activation:
+    enabled: true
+    apply_stages: [task2]
+    novelty_threshold: 0.15
+    use_class_local: true
+    recruit_roles: [reserve]
+    random_recruitment: false
+    reroute_updates: false
+    homeostatic_boost: false
+    weight_transfer: true
+    weight_transfer_source_roles: [stable]
+    weight_transfer_target_roles: [reserve]
+    weight_transfer_noise_sigma: 0.05
+    weight_transfer_class_local: true
 
 train:
-  # The source notebooks train one large tensor/DataLoader batch per epoch.
   batch_size: 24000
-  # C2/S3-input cache tensors are much larger than raw image samples; keep this smaller to avoid GPU OOM.
   s3_cached_batch_size: 1024
   num_workers: 0
   pin_memory: true
   learning_rule: paper_source_rstdp
-  # Paper-reported long run: MNIST initial training uses 600 epochs; subsequent
-  # EMNIST trains S1 for 2 epochs, S2 for 4 epochs, and S3 R-STDP for 100 epochs.
   num_epochs_task1: 600
   num_epochs_task2: 100
   s1_stdp_epochs_task1: 2
@@ -117,11 +132,11 @@ train:
     enabled: true
     root_dir: data/features/c2
     batch_size: 1024
-    # Keep the per-sample .pt cache in RAM across S3 epochs on high-memory servers.
     preload: true
     preload_pin_memory: false
     pin_memory: true
     num_workers: 0
+
 eval:
   batch_size: 1000
   pin_memory: true
@@ -135,3 +150,4 @@ eval:
 output:
   root_dir: experiments
   summary_csv: results/baseline_summary.csv
+  save_task2_model: true

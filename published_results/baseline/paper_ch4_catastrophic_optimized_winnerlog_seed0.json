@@ -1,0 +1,90 @@
+{
+  "run_name": "paper_ch4_catastrophic_optimized_winnerlog_seed0",
+  "method": "catastrophic",
+  "seed": 0,
+  "metrics": {
+    "task1_after_task1": 0.9284,
+    "task1_after_task2": 0.4842,
+    "task2_after_task2": 0.749125,
+    "forgetting": 0.4442,
+    "avg_acc": 0.6166625
+  },
+  "notes": "Paper-source port: model/preprocessing/forward/STDP/anti-STDP follow dmitryanton68/continuous_learning MozafariMNIST2018 notebooks, backed by the official SpykeTorch package.",
+  "source": {
+    "server_repo": "/root/autodl-tmp/NGSG-spyketorch-4a958ae",
+    "server_commit": "e86a263 2026-06-30 12:44:28 +0800 Add latest server status note",
+    "local_artifact_dir": "experiments/server_paper_ch4_catastrophic_optimized_winnerlog_seed0",
+    "config": "configs/baseline/catastrophic_mnist_emnist.yaml",
+    "result_json": "/root/autodl-tmp/NGSG-spyketorch-4a958ae/experiments/paper_ch4_catastrophic_optimized_winnerlog_seed0/result.json"
+  },
+  "task_summary": [
+    {
+      "name": "initial_mnist_digits",
+      "labels": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "train_size": 24000,
+      "test_size": 10000
+    },
+    {
+      "name": "subsequent_emnist_capitals_ABDEGHNQRS",
+      "labels": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "train_size": 24000,
+      "test_size": 8000
+    }
+  ],
+  "training": {
+    "learning_rule": "paper_source_rstdp",
+    "num_epochs_task1": 600,
+    "num_epochs_task2": 100,
+    "s1_stdp_epochs_task1": 2,
+    "s2_stdp_epochs_task1": 4,
+    "s1_stdp_epochs_task2": 2,
+    "s2_stdp_epochs_task2": 4,
+    "winner_frequency_log": {
+      "enabled": true,
+      "top_k": 10,
+      "include_counts": true
+    },
+    "c2_feature_cache": {
+      "enabled": true,
+      "root_dir": "data/features/c2",
+      "batch_size": 1024,
+      "preload": true,
+      "preload_pin_memory": false,
+      "pin_memory": true,
+      "num_workers": 0
+    },
+    "feature_checkpoint": {
+      "enabled": true,
+      "root_dir": "checkpoints/features",
+      "load": true,
+      "save": true,
+      "fallback_match": true
+    }
+  },
+  "checkpoints": {
+    "task1_feature_checkpoint": "checkpoints/features/paper_task1_s1e2_s2e4_f2d9040e64b69b5e.pt",
+    "task2_feature_checkpoint": "checkpoints/features/paper_task2_s1e2_s2e4_ccd0ac7a96b748e5.pt"
+  }
+}

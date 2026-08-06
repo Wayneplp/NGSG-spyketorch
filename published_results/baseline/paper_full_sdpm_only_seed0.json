@@ -1,0 +1,45 @@
+{
+  "run_name": "paper_full_sdpm_only_seed0",
+  "method": "catastrophic",
+  "seed": 0,
+  "metrics": {
+    "task1_after_task1": 0.9314,
+    "task1_after_task2": 0.5745,
+    "task2_after_task2": 0.750125,
+    "forgetting": 0.3569,
+    "avg_acc": 0.6623125000000001
+  },
+  "notes": "Full-scale SDPM-only on paper-source protocol (600/100 epoch, aligned occupancy stats, SDPM on Task2 only). Compared to no-SDPM full baseline: Task1 after Task2 +9.03 pp, Forgetting -8.73 pp, Avg Acc +4.56 pp.",
+  "source": {
+    "server_repo": "/root/autodl-tmp/NGSG-spyketorch-4a958ae",
+    "server_commit": "3f97631 2026-07-03 16:38:17 +0800 fix: align STDP feedback with rerouted winner after reserve recruit",
+    "local_artifact_dir": "experiments/server_paper_full_sdpm_only_seed0",
+    "config": "configs/baseline/catastrophic_mnist_emnist_sdpm.yaml",
+    "result_json": "/root/autodl-tmp/NGSG-spyketorch-4a958ae/experiments/paper_full_sdpm_only_seed0/result.json",
+    "baseline_comparison_run": "paper_ch4_catastrophic_optimized_winnerlog_seed0"
+  },
+  "continual": {
+    "sdpm_gate": {
+      "enabled": true,
+      "gate_mean": 0.9726942777633667,
+      "protected_fraction": 0.3000231981277466,
+      "occupancy_q_i_mean": 0.7601863145828247,
+      "unified_occupancy_stats": true
+    },
+    "neuron_partition": {
+      "enabled": true,
+      "role_counts": {
+        "stable": 60,
+        "shared": 60,
+        "reserve": 80
+      }
+    }
+  },
+  "training": {
+    "num_epochs_task1": 600,
+    "num_epochs_task2": 100,
+    "winner_frequency_log": {
+      "enabled": true
+    }
+  }
+}

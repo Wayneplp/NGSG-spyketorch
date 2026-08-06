@@ -12,6 +12,9 @@ env/
 .DS_Store
 .vscode/
 .idea/
+SERVER_LATEST_STATUS.md
+
+.codex_ssh_askpass.sh
 
 # Experiment artifacts generated locally
 logs/
@@ -24,9 +27,15 @@ data/
 SKILL/
 SKILL.zip
 CATASTROPHIC_FORGETTING_REPRODUCTION.pdf
+.wheel_cache/
 
 # Keep placeholder files if we add them later
 !experiments/.gitkeep
 !logs/.gitkeep
 !checkpoints/.gitkeep
+!checkpoints/
+!checkpoints/features/
+checkpoints/features/*.pt
+!checkpoints/features/paper_task1_s1e2_s2e4_*.pt
+!checkpoints/features/paper_task2_s1e2_s2e4_*.pt
 !results/.gitkeep

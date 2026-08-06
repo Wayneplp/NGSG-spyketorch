@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import gzip
+import hashlib
+import json
+import math
+import os
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+import struct
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
 import random
 
+from PIL import Image
 import torch
 from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets, transforms
@@ -17,6 +24,260 @@ class TaskBundle:
     label_set: List[int]
     train_dataset: Dataset[Any]
     test_dataset: Dataset[Any]
+
+
+class CachedTensorDataset(Dataset[Any]):
+    """Read-only dataset backed by precomputed tensor samples on disk."""
+
+    def __init__(
+        self,
+        cache_dir: Path,
+        length: int,
+        feature_kind: Optional[str] = None,
+        preload: bool = False,
+        pin_memory: bool = False,
+    ) -> None:
+        self.cache_dir = Path(cache_dir)
+        self.length = int(length)
+        self.feature_kind = feature_kind
+        self._preloaded: Optional[List[Any]] = None
+        self._preloaded_inputs: Optional[torch.Tensor] = None
+        self._preloaded_targets: Optional[torch.Tensor] = None
+        if preload:
+            loaded = [self._load_item(index, pin_memory=pin_memory) for index in range(self.length)]
+            try:
+                self._preloaded_inputs = torch.stack([item[0] for item in loaded], dim=0)
+                self._preloaded_targets = torch.tensor([int(item[1]) for item in loaded], dtype=torch.long)
+                if pin_memory and torch.cuda.is_available():
+                    self._preloaded_inputs = self._preloaded_inputs.pin_memory()
+                    self._preloaded_targets = self._preloaded_targets.pin_memory()
+            except RuntimeError:
+                self._preloaded = loaded
+
+    def __len__(self) -> int:
+        return self.length
+
+    def __getitem__(self, index: int) -> Any:
+        if self._preloaded_inputs is not None and self._preloaded_targets is not None:
+            return self._preloaded_inputs[index], int(self._preloaded_targets[index].item())
+        if self._preloaded is not None:
+            return self._preloaded[index]
+        return self._load_item(index, pin_memory=False)
+
+    def _load_item(self, index: int, pin_memory: bool) -> Any:
+        payload = torch.load(self.cache_dir / f"{index:06d}.pt", map_location="cpu")
+        input_tensor = payload["input"]
+        if pin_memory and torch.cuda.is_available():
+            input_tensor = input_tensor.pin_memory()
+        return input_tensor, int(payload["target"])
+
+    @property
+    def is_tensor_preloaded(self) -> bool:
+        return self._preloaded_inputs is not None and self._preloaded_targets is not None
+
+    def tensor_batch(self, indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self._preloaded_inputs is None or self._preloaded_targets is None:
+            raise RuntimeError("CachedTensorDataset tensor_batch requires tensor preloading.")
+        return self._preloaded_inputs[indices], self._preloaded_targets[indices]
+
+
+class InMemoryTensorBatchLoader:
+    """Small DataLoader replacement for preloaded tensor caches.
+
+    It avoids Python per-sample __getitem__ calls and repeated default-collate
+    stacking during long S3 epochs.
+    """
+
+    def __init__(
+        self,
+        dataset: CachedTensorDataset,
+        batch_size: int,
+        shuffle: bool,
+        seed: int = 0,
+    ) -> None:
+        if not dataset.is_tensor_preloaded:
+            raise ValueError("InMemoryTensorBatchLoader requires a tensor-preloaded CachedTensorDataset.")
+        self.dataset = dataset
+        self.batch_size = max(int(batch_size), 1)
+        self.shuffle = bool(shuffle)
+        self.seed = int(seed)
+        self._epoch = 0
+
+    def __len__(self) -> int:
+        return int(math.ceil(len(self.dataset) / self.batch_size))
+
+    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+        if self.shuffle:
+            generator = torch.Generator()
+            generator.manual_seed(self.seed + self._epoch)
+            indices = torch.randperm(len(self.dataset), generator=generator)
+        else:
+            indices = torch.arange(len(self.dataset))
+        self._epoch += 1
+        for start in range(0, len(indices), self.batch_size):
+            yield self.dataset.tensor_batch(indices[start : start + self.batch_size])
+
+
+class RawEMNISTDataset(Dataset[Any]):
+    """Lightweight EMNIST reader that consumes raw idx or idx.gz files directly."""
+
+    def __init__(
+        self,
+        root: Path,
+        split: str,
+        train: bool,
+        transform: Optional[Any] = None,
+    ) -> None:
+        self.root = Path(root)
+        self.split = str(split).lower()
+        self.train = bool(train)
+        self.transform = transform
+        suffix = "train" if self.train else "test"
+        image_stem = f"emnist-{self.split}-{suffix}-images-idx3-ubyte"
+        label_stem = f"emnist-{self.split}-{suffix}-labels-idx1-ubyte"
+
+        images_path = self._resolve_raw_file(image_stem)
+        labels_path = self._resolve_raw_file(label_stem)
+
+        self.data = self._read_idx_images(images_path)
+        self.targets = self._read_idx_labels(labels_path)
+
+    def _resolve_raw_file(self, stem: str) -> Path:
+        candidates = [
+            self.root / "EMNIST" / "raw" / stem,
+            self.root / "EMNIST" / "raw" / f"{stem}.gz",
+            self.root / "EMNIST" / "raw" / "gzip" / f"{stem}.gz",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        raise FileNotFoundError(f"Could not find EMNIST raw file for {stem} under {self.root}")
+
+    def _read_bytes(self, path: Path) -> bytes:
+        if path.suffix == ".gz":
+            with gzip.open(path, "rb") as handle:
+                return handle.read()
+        return path.read_bytes()
+
+    def _read_idx_images(self, path: Path) -> torch.Tensor:
+        payload = self._read_bytes(path)
+        magic, size, rows, cols = struct.unpack(">IIII", payload[:16])
+        if magic != 2051:
+            raise ValueError(f"Unexpected image magic number {magic} in {path}")
+        tensor = torch.frombuffer(memoryview(payload)[16:], dtype=torch.uint8).clone()
+        return tensor.view(size, rows, cols)
+
+    def _read_idx_labels(self, path: Path) -> torch.Tensor:
+        payload = self._read_bytes(path)
+        magic, size = struct.unpack(">II", payload[:8])
+        if magic != 2049:
+            raise ValueError(f"Unexpected label magic number {magic} in {path}")
+        tensor = torch.frombuffer(memoryview(payload)[8:], dtype=torch.uint8).clone()
+        return tensor.view(size)
+
+    def __len__(self) -> int:
+        return int(self.targets.shape[0])
+
+    def __getitem__(self, index: int) -> Any:
+        image = Image.fromarray(self.data[index].numpy(), mode="L")
+        label = int(self.targets[index].item())
+        if self.transform is not None:
+            image = self.transform(image)
+        return image, label
+
+
+def _hash_jsonable(payload: Any) -> str:
+    rendered = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(rendered.encode("utf-8")).hexdigest()
+
+
+def _describe_dataset_for_cache(dataset: Dataset[Any]) -> Dict[str, Any]:
+    if isinstance(dataset, MappedSubset):
+        return {
+            "type": "MappedSubset",
+            "length": len(dataset),
+            "indices_hash": _hash_jsonable(dataset.indices),
+            "label_mapping": dict(sorted(dataset.label_mapping.items())),
+            "base": _describe_dataset_for_cache(dataset.dataset),
+        }
+
+    if isinstance(dataset, Subset):
+        return {
+            "type": "Subset",
+            "length": len(dataset),
+            "indices_hash": _hash_jsonable(list(dataset.indices)),
+            "base": _describe_dataset_for_cache(dataset.dataset),
+        }
+
+    description: Dict[str, Any] = {
+        "type": dataset.__class__.__name__,
+        "length": len(dataset),
+    }
+    for attr in ("root", "split", "train", "cache_dir", "feature_kind"):
+        if hasattr(dataset, attr):
+            value = getattr(dataset, attr)
+            description[attr] = str(value) if isinstance(value, Path) else value
+    return description
+
+
+def build_preprocessed_tensor_cache(
+    dataset: Dataset[Any],
+    cache_root: Path,
+    encoder: Any,
+    metadata: Mapping[str, Any],
+    feature_kind: Optional[str] = None,
+    preload: bool = False,
+    pin_memory: bool = False,
+) -> CachedTensorDataset:
+    """Materialize encoded tensors once, then read them back as a dataset."""
+
+    cache_payload = {
+        "version": 1,
+        "metadata": dict(metadata),
+        "dataset": _describe_dataset_for_cache(dataset),
+    }
+    fingerprint = _hash_jsonable(cache_payload)[:16]
+    cache_dir = Path(cache_root) / fingerprint
+    metadata_path = cache_dir / "metadata.json"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    if not metadata_path.exists():
+        metadata_path.write_text(json.dumps(cache_payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    length = len(dataset)
+    missing = [idx for idx in range(length) if not (cache_dir / f"{idx:06d}.pt").exists()]
+    if missing:
+        print(
+            f"[cache] materializing {len(missing)}/{length} samples into {cache_dir}",
+            flush=True,
+        )
+        for position, sample_idx in enumerate(missing, start=1):
+            image, target = dataset[sample_idx]
+            encoded = encoder(image)
+            payload = {
+                "input": encoded.detach().cpu().contiguous(),
+                "target": int(target),
+            }
+            target_path = cache_dir / f"{sample_idx:06d}.pt"
+            tmp_path = cache_dir / f".{sample_idx:06d}.{os.getpid()}.tmp"
+            torch.save(payload, tmp_path)
+            os.replace(tmp_path, target_path)
+            if position % 500 == 0 or position == len(missing):
+                print(
+                    f"[cache] saved {position}/{len(missing)} samples into {cache_dir.name}",
+                    flush=True,
+                )
+
+    if preload:
+        print(f"[cache] preloading {length} samples from {cache_dir} into RAM", flush=True)
+
+    return CachedTensorDataset(
+        cache_dir=cache_dir,
+        length=length,
+        feature_kind=feature_kind,
+        preload=preload,
+        pin_memory=pin_memory,
+    )
 
 
 def _build_transform(normalize: bool) -> transforms.Compose:
@@ -159,9 +420,18 @@ def _build_torchvision_dataset(
             normalize=normalize,
             fix_orientation=bool(dataset_config.get("fix_orientation", True)),
         )
+        split = str(dataset_config.get("split", "letters"))
+        raw_gzip_path = data_root / "EMNIST" / "raw" / "gzip" / f"emnist-{split.lower()}-{'train' if train else 'test'}-images-idx3-ubyte.gz"
+        if raw_gzip_path.exists():
+            return RawEMNISTDataset(
+                root=data_root,
+                split=split,
+                train=train,
+                transform=transform,
+            )
         return datasets.EMNIST(
             root=data_root,
-            split=str(dataset_config.get("split", "letters")),
+            split=split,
             train=train,
             download=True,
             transform=transform,
@@ -256,13 +526,21 @@ def build_dataloader(
     batch_size: int,
     shuffle: bool,
     num_workers: int = 0,
+    pin_memory: bool = False,
+    persistent_workers: bool = False,
+    prefetch_factor: Optional[int] = None,
 ) -> DataLoader[Any]:
-    return DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=num_workers,
-    )
+    loader_kwargs: Dict[str, Any] = {
+        "batch_size": batch_size,
+        "shuffle": shuffle,
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+    }
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = persistent_workers
+        if prefetch_factor is not None:
+            loader_kwargs["prefetch_factor"] = prefetch_factor
+    return DataLoader(dataset, **loader_kwargs)
 
 
 class ConcatenatedSubset(Dataset[Any]):

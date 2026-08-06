@@ -23,8 +23,11 @@ def ensure_dir(path: Path) -> Path:
 
 def move_batch_to_device(batch: Iterable[Any], device: torch.device) -> tuple[Any, ...]:
     moved = []
+    non_blocking = device.type == "cuda"
     for item in batch:
-        if hasattr(item, "to"):
+        if isinstance(item, torch.Tensor):
+            moved.append(item.to(device, non_blocking=non_blocking))
+        elif hasattr(item, "to"):
             moved.append(item.to(device))
         else:
             moved.append(item)

@@ -73,6 +73,8 @@ class PaperMozafariMNIST2018(nn.Module):
             self.decision_map.extend([class_idx] * self.config.neurons_per_class)
 
         self.ctx: Dict[str, Any] = {"input_spikes": None, "potentials": None, "output_spikes": None, "winners": None}
+        self.s3_potential_boost: Optional[Tensor] = None
+        self.s3_wta_allow_mask: Optional[Tensor] = None
         self.spk_cnt1 = 0
         self.spk_cnt2 = 0
 
@@ -109,21 +111,46 @@ class PaperMozafariMNIST2018(nn.Module):
             image = image.unsqueeze(0)
         if image.ndim != 3:
             raise ValueError("Expected single image tensor with shape CxHxW.")
-        image = image.to(next(self.parameters()).device)
-        if image.max() <= 1.0:
-            image = image * 255.0
-        image = image.unsqueeze(0).float()
-        filtered = self.source_filter(image)
-        normalized = sf.local_normalization(filtered, self.config.local_normalization_radius)
-        if not torch.any(normalized > 0):
-            _, channels, height, width = normalized.shape
-            return torch.zeros(
-                (self.config.time_steps, channels, height, width),
-                dtype=torch.uint8,
-                device=normalized.device,
-            )
-        temporal_image = self.temporal_transform(normalized)
-        return temporal_image.sign().byte().to(next(self.parameters()).device)
+        batch = self.encode_batch(image.unsqueeze(0))
+        return batch[0]
+
+    def encode_batch(self, images: Tensor) -> Tensor:
+        """Encode a batch of images ``B×C×H×W`` into temporal spike tensors on the model device.
+
+        SpykeTorch ``Filter`` / ``local_normalization`` treat dim0 as a time axis for a
+        single sample, so each image is encoded independently with minibatch=1.
+        """
+        if images.ndim == 3:
+            images = images.unsqueeze(0)
+        if images.ndim != 4:
+            raise ValueError("Expected image batch with shape BxCxHxW.")
+        device = next(self.parameters()).device
+        if self.source_filter.kernels.device != device:
+            self.source_filter.kernels = self.source_filter.kernels.to(device)
+        if isinstance(self.source_filter.thresholds, torch.Tensor) and self.source_filter.thresholds.device != device:
+            self.source_filter.thresholds = self.source_filter.thresholds.to(device)
+        images = images.to(device, non_blocking=device.type == "cuda")
+        if images.max() <= 1.0:
+            images = images * 255.0
+        images = images.float()
+        outputs = []
+        for index in range(int(images.shape[0])):
+            sample = images[index : index + 1]
+            filtered = self.source_filter(sample)
+            normalized = sf.local_normalization(filtered, self.config.local_normalization_radius)
+            if not torch.any(normalized > 0):
+                _, channels, height, width = normalized.shape
+                outputs.append(
+                    torch.zeros(
+                        (self.config.time_steps, channels, height, width),
+                        dtype=torch.uint8,
+                        device=device,
+                    )
+                )
+                continue
+            temporal_image = self.temporal_transform(normalized)
+            outputs.append(temporal_image.sign().byte())
+        return torch.stack(outputs, dim=0)
 
     def forward(self, input: Tensor, max_layer: int = 3) -> Any:  # type: ignore[override]
         if input.ndim == 3 or (input.ndim == 4 and input.shape[0] == 1):
@@ -166,7 +193,8 @@ class PaperMozafariMNIST2018(nn.Module):
 
             spk_in = sf.pad(sf.pooling(spk, 3, 3), (2, 2, 2, 2))
             pot = self.conv3(spk_in)
-            spk = sf.fire(pot)
+            pot = self._apply_s3_potential_boost(pot)
+            pot, spk = self._s3_wta_inputs(pot)
             winners = sf.get_k_winners(pot, 1, self.r3, spk)
             self._store_context(spk_in, pot, spk, winners)
             return self._decision_from_winners(winners)
@@ -180,7 +208,8 @@ class PaperMozafariMNIST2018(nn.Module):
         if max_layer == 2:
             return spk, pot
         pot = self.conv3(sf.pad(sf.pooling(spk, 3, 3), (2, 2, 2, 2)))
-        spk = sf.fire(pot)
+        pot = self._apply_s3_potential_boost(pot)
+        pot, spk = self._s3_wta_inputs(pot)
         winners = sf.get_k_winners(pot, 1, self.r3, spk)
         return self._decision_from_winners(winners)
 
@@ -194,6 +223,77 @@ class PaperMozafariMNIST2018(nn.Module):
         if len(winners) == 0:
             return -1
         return int(self.decision_map[int(winners[0][0])])
+
+    def set_s3_potential_boost(self, boost: Optional[Tensor]) -> None:
+        if boost is None:
+            self.s3_potential_boost = None
+            return
+        self.s3_potential_boost = boost.detach().float().to(next(self.parameters()).device)
+
+    def clear_s3_potential_boost(self) -> None:
+        self.s3_potential_boost = None
+
+    def set_s3_wta_allow_mask(self, allow_mask: Optional[Tensor]) -> None:
+        if allow_mask is None:
+            self.s3_wta_allow_mask = None
+            return
+        self.s3_wta_allow_mask = allow_mask.detach().bool().to(next(self.parameters()).device)
+
+    def clear_s3_wta_allow_mask(self) -> None:
+        self.s3_wta_allow_mask = None
+
+    def _s3_wta_inputs(self, pot: Tensor) -> tuple[Tensor, Tensor]:
+        masked_pot = self._apply_s3_wta_mask(pot)
+        spk = sf.fire(masked_pot)
+        masked_spk = self._apply_s3_wta_mask(spk)
+        return masked_pot, masked_spk
+
+    def _s3_wta_mask_feature_axis(self, tensor: Tensor, allow_mask: Tensor) -> int:
+        if tensor.ndim == 3 and int(tensor.shape[0]) == int(allow_mask.numel()):
+            return 0
+        if tensor.ndim == 4:
+            if int(tensor.shape[1]) == int(allow_mask.numel()):
+                return 1
+            if int(tensor.shape[0]) == int(allow_mask.numel()):
+                return 0
+        raise ValueError(
+            f"Invalid S3 WTA allow mask length {int(allow_mask.numel())} "
+            f"for tensor shape {tuple(tensor.shape)}."
+        )
+
+    def _apply_s3_wta_mask(self, pot: Tensor) -> Tensor:
+        allow_mask = self.s3_wta_allow_mask
+        if allow_mask is None or allow_mask.numel() == 0:
+            return pot
+        allow_mask = allow_mask.to(device=pot.device, dtype=torch.bool)
+        axis = self._s3_wta_mask_feature_axis(pot, allow_mask)
+        closed = ~allow_mask
+        if not bool(closed.any()):
+            return pot
+        masked = pot.clone()
+        if axis == 0:
+            masked[closed] = 0
+            return masked
+        if axis == 1:
+            masked[:, closed] = 0
+            return masked
+        return pot
+
+    def _apply_s3_potential_boost(self, pot: Tensor) -> Tensor:
+        boost = self.s3_potential_boost
+        if boost is None or boost.numel() == 0:
+            return pot
+        boost = boost.to(device=pot.device, dtype=pot.dtype)
+        if pot.ndim == 3 and int(pot.shape[0]) == int(boost.numel()):
+            reference = pot.detach().amax().clamp_min(0.0)
+            return pot + boost.view(-1, 1, 1) * reference
+        if pot.ndim == 4 and int(pot.shape[1]) == int(boost.numel()):
+            reference = pot.detach().amax(dim=(1, 2, 3), keepdim=True).clamp_min(0.0)
+            return pot + boost.view(1, -1, 1, 1) * reference
+        if pot.ndim == 4 and int(pot.shape[0]) == int(boost.numel()):
+            reference = pot.detach().amax().clamp_min(0.0)
+            return pot + boost.view(-1, 1, 1, 1) * reference
+        return pot
 
     def stdp(self, layer_idx: int) -> None:
         if layer_idx == 1:
@@ -219,6 +319,62 @@ class PaperMozafariMNIST2018(nn.Module):
     def punish(self) -> None:
         self.anti_stdp3(self.ctx["input_spikes"], self.ctx["potentials"], self.ctx["output_spikes"], self.ctx["winners"])
 
+    def extract_s3_input(self, input: Tensor) -> Tensor:
+        """Return the pooled C2 spikes used as conv3/S3 input."""
+        if input.ndim == 3 or (input.ndim == 4 and input.shape[0] == 1):
+            input = self.encode(input.squeeze(0) if input.ndim == 4 else input)
+        input = sf.pad(input.float().to(next(self.parameters()).device), (2, 2, 2, 2), 0)
+        pot = self.conv1(input)
+        spk, _ = sf.fire(pot, self.conv1_t, True)
+        spk_in = sf.pad(sf.pooling(spk, 2, 2), (1, 1, 1, 1))
+        pot = self.conv2(spk_in)
+        spk, _ = sf.fire(pot, self.conv2_t, True)
+        return sf.pad(sf.pooling(spk, 3, 3), (2, 2, 2, 2)).detach().contiguous()
+
+    def forward_from_s3_input(self, s3_input: Tensor) -> int:
+        """Run only S3/C3/classification from a cached C2 pooled feature tensor."""
+        if s3_input.ndim == 5 and s3_input.shape[0] == 1:
+            s3_input = s3_input.squeeze(0)
+        model_device = next(self.parameters()).device
+        if s3_input.device != model_device:
+            s3_input = s3_input.float().to(model_device, non_blocking=model_device.type == "cuda")
+        elif s3_input.dtype != torch.float32:
+            s3_input = s3_input.float()
+        pot = self.conv3(s3_input)
+        pot = self._apply_s3_potential_boost(pot)
+        pot, spk = self._s3_wta_inputs(pot)
+        winners = sf.get_k_winners(pot, 1, self.r3, spk)
+        self._store_context(s3_input, pot, spk, winners)
+        return self._decision_from_winners(winners)
+
+    @torch.no_grad()
+    def forward_s3_potentials(self, image: Tensor) -> Tensor:
+        """Eval-mode forward through S3, returning conv3 potentials."""
+        if image.ndim == 3 or (image.ndim == 4 and image.shape[0] == 1):
+            image = image.squeeze(0) if image.ndim == 4 else image
+            input_spikes = self.encode(image)
+        elif image.ndim == 4 and int(image.shape[0]) == int(self.config.time_steps):
+            # Pre-encoded temporal spikes from paper preprocess cache.
+            input_spikes = image
+        else:
+            raise ValueError(
+                "Expected raw image CxHxW or pre-encoded temporal spikes TxCxHxW."
+            )
+        input_spikes = sf.pad(input_spikes.float(), (2, 2, 2, 2), 0)
+        pot = self.conv1(input_spikes)
+        spk, pot = sf.fire(pot, self.conv1_t, True)
+        pot = self.conv2(sf.pad(sf.pooling(spk, 2, 2), (1, 1, 1, 1)))
+        spk, pot = sf.fire(pot, self.conv2_t, True)
+        return self.conv3(sf.pad(sf.pooling(spk, 3, 3), (2, 2, 2, 2)))
+
+    def predict_from_s3_input(self, s3_input: Tensor) -> int:
+        was_training = self.training
+        self.eval()
+        with torch.no_grad():
+            output = int(self.forward_from_s3_input(s3_input))
+        if was_training:
+            self.train()
+        return output
     def predict_single(self, image: Tensor) -> int:
         was_training = self.training
         self.eval()

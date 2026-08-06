@@ -1,0 +1,27 @@
+{
+  "run_name": "method_v1_role_train_r1_full_seed0",
+  "source": "server",
+  "config": "configs/ngsg/method_v1_role_train_r1_full_seed0.yaml",
+  "completed_at": "2026-07-09 22:57",
+  "role_counts": {"stable": 60, "shared": 60, "reserve": 80, "dead": 0},
+  "continual_flags": {
+    "sdpm": false,
+    "reserve_activation": false,
+    "neuron_partition": true,
+    "role_train": true
+  },
+  "metrics": {
+    "task1_after_task1": 0.9313,
+    "task1_after_task2": 0.9034,
+    "task2_after_task2": 0.0945,
+    "forgetting_pp": 2.79,
+    "avg_acc": 0.49895
+  },
+  "vs_r0_partition": {
+    "task1_after_task2_delta_pp": 42.8,
+    "forgetting_delta_pp": -42.81,
+    "task2_after_task2_delta_pp": -65.98
+  },
+  "note": "INVALID (neg-inf WTA mask bug): Task2 train proxy stuck at 10% with winner_active=1/200. Do not use for paper. Superseded by R1-fixed-zero-mask after probe validation 2026-07-10.",
+  "status": "invalid-neg-inf-mask"
+}

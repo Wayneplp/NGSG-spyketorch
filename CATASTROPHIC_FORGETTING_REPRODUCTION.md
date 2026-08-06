@@ -1,9 +1,263 @@
 # 灾难性遗忘复现状态记录
 
-最后更新：2026-06-29
+最后更新：2026-07-09
 
-本次补充：已暂停正在运行的中等规模实验，并把主 catastrophic baseline 切换为论文作者源码 dmitryanton68/continuous_learning 的 SpykeTorch 移植版。
+> **注意（2026-07-09）：** 仓库已删除全部 `configs/**/*medium*` 与 `published_results/diagnostics/*medium*.json`。下文 medium 段落为**历史日志**，数字**不得**用于论文 claim 或推断 full 行为。权威证据见 README §0.0–0.0.1 与 `实验列表.md`。
 
+本次补充：服务器 2 号完成 SDPM medium 验证和同代码 no-SDPM paired baseline；SDPM gate 已确认能拟合并在 Task2 生效，但当前 SDPM-only 牺牲 Task2 学习，平均精度不优于 no-SDPM。服务器完整 catastrophic baseline 仍以 `published_results/baseline/paper_ch4_catastrophic_optimized_winnerlog_seed0.json` 作为当前 NGSG 统计基线参考。
+
+
+## 2026-07-02 服务器 2 号 SDPM medium 验证
+
+目的：这组实验不是正式论文规模结果，而是验证 SDPM gate 代码路径是否真的生效，并用同服务器、同代码、同 medium 数据规模的 no-SDPM 结果做 paired baseline。
+
+服务器与代码状态：
+
+- 服务器：`ssh -p 40399 root@connect.nmb1.seetacloud.com`
+- 服务器仓库：`/root/autodl-tmp/NGSG-spyketorch-4a958ae`
+- 服务器初始分支：`codex/server-preprocess-cache`
+- 服务器初始提交：`e86a263 Add latest server status note`
+- GPU：NVIDIA GeForce RTX 4090，训练前后均可正常释放。
+- 已上传本地 SDPM 小文件：`src/continual/sdpm_gate.py`、`src/continual/__init__.py`、`src/trainers/baseline_trainer.py`、两个 SDPM YAML 和 `SDPM_GATE_DESIGN.md`。
+- 上传前远端备份：`/root/autodl-tmp/ngsg_backup_sdpm_20260702_154556`
+- 服务器磁盘较紧：`/root/autodl-tmp` 50G 中约 48G 已用，实验结束后剩余约 2.1G。
+
+服务器缓存状态：
+
+- `data/preprocessed/paper_source`：约 4.6G，预检时共 66,000 个 `.pt`。
+- `data/features/c2`：约 44G，预检时共 48,000 个 `.pt`。
+- `checkpoints/features`：存在 task1/task2 S1/S2 checkpoint。
+
+误启动记录：
+
+- 曾误启动完整 `configs/baseline/catastrophic_mnist_emnist_sdpm.yaml`，run name 为 `paper_ch4_sdpm_only_seed0`。
+- 该任务在 Task1 S3 训练早期停止，停止前约到 epoch 9/600，未进入 Task2 SDPM 验证阶段。
+- 已通过 `tmux send-keys C-c` 停止，GPU 恢复到 0 MiB。该目录和日志未删除，避免误删实验产物。
+
+### SDPM-only medium 验证
+
+运行信息：
+
+- run name：`paper_medium_sdpm_only_seed0`
+- 配置：`configs/baseline/catastrophic_mnist_emnist_paper_medium_sdpm.yaml`
+- 结果文件：`/root/autodl-tmp/NGSG-spyketorch-4a958ae/experiments/paper_medium_sdpm_only_seed0/result.json`
+- 日志文件：`/root/autodl-tmp/NGSG-spyketorch-4a958ae/logs/paper_medium_sdpm_only_seed0.log`
+- 规模：MNIST 每类 100 train / 100 test，EMNIST 每类 100 train / 100 test；Task1 S3 50 epoch，Task2 S3 10 epoch。
+
+关键日志：
+
+```text
+[sdpm gate] fitted from Task 1 stats: protected_fraction=0.3000 gate_mean=0.9329 random_protection=False
+[paper s3] SDPM gate active for stage=task2
+```
+
+SDPM gate 统计：
+
+| 字段 | 数值 |
+| --- | ---: |
+| protected_fraction | 0.3000 |
+| gate_mean | 0.9329 |
+| gate_min | 0.0500 |
+| gate_max | 1.0000 |
+| importance_mean | 0.0706 |
+| update_calls | 10000 |
+
+测试指标：
+
+| 指标 | 数值 |
+| --- | ---: |
+| Task1 after Task1 / MNIST 初训后 | 79.6% |
+| Task1 after Task2 / EMNIST 后 MNIST 保持 | 68.1% |
+| Task2 after Task2 / EMNIST 后 EMNIST | 54.8% |
+| Forgetting | 11.5 个百分点 |
+| Avg Acc | 61.45% |
+
+### 同代码 no-SDPM paired baseline
+
+运行信息：
+
+- run name：`paper_medium_no_sdpm_samecode_seed0`
+- 配置：远端从 SDPM medium 配置复制生成 `configs/baseline/catastrophic_mnist_emnist_paper_medium_no_sdpm_samecode.yaml`，仅将 `continual.sdpm_gate.enabled` 改为 `false`。
+- 结果文件：`/root/autodl-tmp/NGSG-spyketorch-4a958ae/experiments/paper_medium_no_sdpm_samecode_seed0/result.json`
+- 日志文件：`/root/autodl-tmp/NGSG-spyketorch-4a958ae/logs/paper_medium_no_sdpm_samecode_seed0.log`
+
+测试指标：
+
+| 指标 | 数值 |
+| --- | ---: |
+| Task1 after Task1 / MNIST 初训后 | 79.6% |
+| Task1 after Task2 / EMNIST 后 MNIST 保持 | 65.9% |
+| Task2 after Task2 / EMNIST 后 EMNIST | 60.3% |
+| Forgetting | 13.7 个百分点 |
+| Avg Acc | 63.10% |
+
+### Paired 结论
+
+| 配置 | Task1 after Task1 | Task1 after Task2 | Task2 after Task2 | Forgetting | Avg Acc |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| no-SDPM same-code | 79.6% | 65.9% | 60.3% | 13.7 pp | 63.10% |
+| SDPM-only | 79.6% | 68.1% | 54.8% | 11.5 pp | 61.45% |
+| SDPM - no-SDPM | 0.0 pp | +2.2 pp | -5.5 pp | -2.2 pp | -1.65 pp |
+
+判断：
+
+- 机制验证通过：SDPM gate 确实从 Task1 winner statistics 拟合，并在 Task2 的 reward / anti-reward STDP 更新中生效。
+- SDPM-only 有旧任务保护效果：Task1 after Task2 提升 2.2 个百分点，forgetting 降低 2.2 个百分点。
+- 当前 SDPM-only 不够强：Task2 after Task2 下降 5.5 个百分点，导致平均精度低于 no-SDPM。
+- 这符合 SDPM 的模块定位：它是旧知识 soft protection 分支，不负责给新任务主动分配 reserve capacity；后续需要 novelty gate / reserve activation 补足新任务学习能力。
+- 若继续调 SDPM-only，优先尝试更弱保护，例如 `protect_top_fraction=0.1` 或提高 `g_min=0.2/0.3`，观察 Task2 是否恢复，同时旧任务保持是否仍优于 no-SDPM。
+
+
+## 2026-07-02 winner-frequency logging 服务器 baseline 结果
+
+运行信息：
+
+- 服务器仓库：`/root/autodl-tmp/NGSG-spyketorch-4a958ae`
+- run name：`paper_ch4_catastrophic_optimized_winnerlog_seed0`
+- 配置：`configs/baseline/catastrophic_mnist_emnist.yaml`
+- 代码版本：`e86a263 Add latest server status note`
+- 完成时间：2026-07-02 03:29:59 +0800
+- 本机原始副本：`experiments/server_paper_ch4_catastrophic_optimized_winnerlog_seed0/`
+- 精简结果：`published_results/baseline/paper_ch4_catastrophic_optimized_winnerlog_seed0.json`
+
+关键结果：
+
+| 指标 | 本次结果 | 论文 catastrophic forgetting 参考 |
+| --- | ---: | ---: |
+| Initial MNIST / Task1 after Task1 | 92.84% | 90.8 ± 0.9% |
+| Subsequent MNIST / Task1 after Task2 | 48.42% | 48.1 ± 4.8% |
+| Subsequent EMNIST / Task2 after Task2 | 74.91% | 78.4 ± 1.2% |
+| Forgetting | 44.42% | 约 42.7% |
+| Avg Acc | 61.67% | - |
+
+运行细节：
+
+- Task1 MNIST：24,000 train / 10,000 test。
+- Task2 EMNIST ABDEGHNQRS：24,000 train / 8,000 test。
+- S3 训练：Task1 600 epoch，Task2 100 epoch。
+- S1/S2 训练：每个任务 S1 2 epoch，S2 4 epoch。
+- `winner_frequency_log.enabled: true`，记录 top-10 winner 和完整 winner counts，用于后续 stable/shared/reserve neuron 划分。
+- `c2_feature_cache.batch_size: 1024`，避免 cached C2 tensor 一次性 24,000 batch 造成 CUDA OOM。
+- 远端当前是无 GPU 模式上电，`tmux` 会话已结束，`nvidia-smi` 在该模式下返回 permission denied。
+
+判断：
+
+这次结果比 2026-07-01 基线的 MNIST 保留率更贴近论文表格：48.42% vs 48.1%。Initial MNIST 仍略高，EMNIST 仍低约 3.5 个点，但整体遗忘幅度和论文 baseline 已经对齐。由于本次额外记录 winner-frequency 统计，后续 NGSG 的 neuron partition、novelty gate 和 reserve activation 应优先基于这次产物继续做。
+
+
+## 2026-07-01 正式服务器 baseline 结果
+
+运行信息：
+
+- 运行目录：`/root/autodl-tmp/NGSG-spyketorch-dev-2928f7e`
+- run name：`paper_ch4_catastrophic_source_seed0`
+- 配置：`configs/baseline/catastrophic_mnist_emnist.yaml`
+- 代码版本：`2928f7e fix: reuse feature checkpoints across cache paths`
+- 本机原始副本：`experiments/server_paper_ch4_catastrophic_source_seed0/`
+- GitHub 精简结果：`published_results/baseline/paper_ch4_catastrophic_source_seed0.json`
+
+关键结果：
+
+| 指标 | 本次结果 | 论文 catastrophic forgetting 参考 |
+| --- | ---: | ---: |
+| Initial MNIST / Task1 after Task1 | 93.14% | 90.8 ± 0.9% |
+| Subsequent MNIST / Task1 after Task2 | 47.54% | 48.1 ± 4.8% |
+| Subsequent EMNIST / Task2 after Task2 | 75.43% | 78.4 ± 1.2% |
+| Forgetting | 45.60% | 约 42.7% |
+| Avg Acc | 61.48% | - |
+
+运行细节：
+
+- Task1 MNIST：24,000 train / 10,000 test。
+- Task2 EMNIST ABDEGHNQRS：24,000 train / 8,000 test。
+- Task1 S1/S2 checkpoint：`checkpoints/features/paper_task1_s1e2_s2e4_f2d9040e64b69b5e.pt`，exact match 加载。
+- Task2 S1/S2 checkpoint：`checkpoints/features/paper_task2_s1e2_s2e4_60c0a06b55746fb6.pt`，fallback match 加载。
+- Task1 C2 cache：`data/features/c2/126b5223a233559d`。
+- 训练过程已使用 `c2_feature_cache.batch_size: 1024`，避免 cached C2 tensor 一次性 24,000 batch 造成 CUDA OOM。
+
+判断：
+
+catastrophic forgetting 趋势已经复现出来。Task2 后 MNIST 保留率 47.54%，和论文 48.1% 非常接近；Initial MNIST 高约 2.3 个点，EMNIST 低约 3 个点。当前可以把该结果作为后续 winner-frequency logging 和 NGSG 的 baseline 参考，但如果目标是严格追论文表格数字，还需要继续核对 EMNIST 数据处理、作者 notebook 的张量保存格式、随机种子和评估协议。
+## 2026-06-30 晚更新：active baseline YAML 收敛
+
+`configs/baseline/` 当前只保留 3 个 active YAML：
+
+- `catastrophic_mnist_emnist.yaml`：服务器正式完整 catastrophic baseline。
+- `catastrophic_mnist_emnist_feature_checkpoint.yaml`：仅用于重建 S1/S2 checkpoint 和 C2 cache。
+- `catastrophic_mnist_emnist_paper_medium.yaml`：本地中等规模诊断。
+
+旧的 toy/probe/stabilizer/frozen/Langevin/joint-training YAML 已删除；本文件后面的旧命令只作为历史实验记录，不再代表当前推荐入口。当前不复现 joint training。
+## 2026-06-30 晚更新：S1/S2 checkpoint 已生成并推送
+
+当前 `dev` 已包含 feature-cache implementation、正式 S1/S2 checkpoint 和 active config 收敛说明。
+
+已经完成的本地 feature-only 运行：
+
+- 运行名：`paper_feature_checkpoint_full`
+- 配置：`configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml`
+- 设备：CUDA
+- Task1 MNIST：24,000 个训练样本，S1 2 epoch，S2 4 epoch
+- Task2 EMNIST：24,000 个训练样本，S1 2 epoch，S2 4 epoch
+- S3：跳过，`output_training.skipped = feature_only`
+
+已随 git 跟踪并推送的小 checkpoint：
+
+```text
+checkpoints/features/paper_task1_s1e2_s2e4_f26edcfb75b5d681.pt
+checkpoints/features/paper_task2_s1e2_s2e4_60c0a06b55746fb6.pt
+```
+
+本地已生成但不进 git 的大缓存：
+
+```text
+data/preprocessed/paper_source/e40948d119942523 -> 24000 个 .pt
+data/preprocessed/paper_source/a390cd0731f5a594 -> 24000 个 .pt
+data/features/c2/7ea7511c03cbf772 -> 24000 个 .pt
+data/features/c2/8d3b69701aacd0b0 -> 24000 个 .pt
+```
+
+`data/features/c2` 两个正式目录合计约 46GB，因此不通过 git 同步。服务器端拉取 `dev` 后可以直接获得 S1/S2 checkpoint；首次跑完整 baseline 时会在服务器本地重建 C2 cache，之后可重复使用。
+
+服务器当前推荐命令：
+
+```bash
+git fetch origin
+git checkout dev
+git pull origin dev
+python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist.yaml --device cuda --run-name paper_ch4_catastrophic_source_seed0
+```
+
+只有当 checkpoint 缺失或需要重建时，才运行 feature-only 配置：
+
+```bash
+python scripts/run_baseline.py --config configs/baseline/catastrophic_mnist_emnist_feature_checkpoint.yaml --device cuda --run-name paper_feature_checkpoint_full
+```
+## 2026-06-30 更新：缓存与服务器分支整理
+
+`origin/codex/server-preprocess-cache` 上的共享 infra 已合并进 `dev`。之后本地和服务器都应优先跟 `dev` 跑，不再把 `codex/server-preprocess-cache` 当作长期实验分支维护。
+
+本次进入 `dev` 的关键改动：
+
+- paper-source 路线增加离线预处理缓存，缓存目录为 `data/preprocessed/paper_source/<hash>/`。
+- 训练日志增加 epoch 级进度输出，长跑时更容易判断是否仍在推进。
+- EMNIST letters 在服务器上如果经由 `torchvision.datasets.EMNIST(split="letters")` 初始化失败，会从 `data/emnist/EMNIST/raw/gzip/` 下的 raw idx / idx.gz 文件直接读取。
+- `SERVER_LATEST_STATUS.md` 被明确视为服务器运行时快照，不再进入 git；需要长期保留的信息应整理进本文档或 README。
+
+服务器更新代码时建议：
+
+```bash
+git fetch origin
+git checkout dev
+git pull origin dev
+pip install -r requirements.txt
+```
+
+缓存进度检查示例：
+
+```bash
+find data/preprocessed/paper_source -name '*.pt' | wc -l
+tail -n 50 logs/preprocess_*.log
+```
 
 ## 2026-06-29 最新更新：暂停运行并移植论文源码
 
@@ -46,7 +300,7 @@ C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config c
 C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config configs\baseline\catastrophic_mnist_emnist.yaml --device auto --run-name paper_ch4_catastrophic_source_seed0
 ```
 
-仍需注意：当前移植已经按作者源码结构对齐，但 torchvision 的 EMNIST letters 读取、方向修正和作者仓库里预处理好的张量文件可能仍有细微差异。后续如果要追到论文表格数值，需要继续核对作者仓库里的数据保存格式和 notebook 中实际加载的 `.pt` 文件来源。
+仍需注意：当前移植已经按作者源码结构对齐，并已加入 EMNIST raw idx fallback 来绕过服务器上 `torchvision.datasets.EMNIST(split="letters")` 初始化不稳定的问题。不过 EMNIST 方向修正、作者仓库里预处理好的张量文件来源、以及 notebook 中实际加载的 `.pt` 文件格式仍可能带来细微差异。后续如果要追到论文表格数值，需要继续核对这些数据保存与加载细节。
 
 ## 2026-06-29 中等规模论文源码移植版运行结果
 
@@ -414,3 +668,4 @@ C:\Users\pw\.conda\envs\Spyketorch\python.exe scripts\run_baseline.py --config c
 ```
 
 完整配置非常耗时，建议先跑中等规模配置再跑完整 600/100 epoch。
+

@@ -1,19 +1,9 @@
-# Paper-source catastrophic forgetting baseline for
-# "Continuous Learning of Spiking Networks Trained with Local Rules".
-#
-# Protocol from the paper/Table 1:
-# 1. Initial training on MNIST digits.
-# 2. Subsequent training on EMNIST capital letters A, B, D, E, G, H, N, Q, R, S.
-# 3. MNIST data are not used during subsequent EMNIST training.
-# 4. Report initial MNIST, subsequent MNIST retention, and subsequent EMNIST.
-#
-# Current implementation: direct project port of the author's
-# dmitryanton68/continuous_learning MozafariMNIST2018 notebooks. It uses the
-# official SpykeTorch package and keeps the source conv/STDP/anti-STDP settings.
+# Auto-generated Neurocomputing formal matrix config
+# order=mnist_to_emnist method=role_train seed=1
+# See configs/neurocomputing/PROTOCOL.md
 method: catastrophic
-seed: 0
-run_name: null
-
+seed: 1
+run_name: neurocomputing_mnist_to_emnist_role_train_seed1
 data:
   dataset_name: paper_mnist_emnist
   data_root: data
@@ -21,35 +11,76 @@ data:
   input_channels: 1
   num_classes: 10
   normalize: false
-  subset_seed: 0
+  subset_seed: 1
   preprocess_cache: true
   preprocess_cache_root: data/preprocessed/paper_source
+  preprocess_encode_batch_size: 128
+  preprocess_cache_pin_memory: true
 tasks:
   task_specs:
-    - name: initial_mnist_digits
+    -
+      name: mnist_digits
       dataset:
         dataset_name: mnist
         data_root: data/mnist
         normalize: false
-      labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-      mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      labels:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+        - 8
+        - 9
+      mapped_labels:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+        - 8
+        - 9
       train_samples_per_label: 2400
-    - name: subsequent_emnist_capitals_ABDEGHNQRS
+    -
+      name: emnist_capitals_ABDEGHNQRS
       dataset:
         dataset_name: emnist
         split: letters
         data_root: data/emnist
         normalize: false
         fix_orientation: true
-      # torchvision EMNIST letters are 1-indexed: A=1, B=2, D=4, E=5,
-      # G=7, H=8, N=14, Q=17, R=18, S=19. Map them onto 10 output groups.
-      labels: [1, 2, 4, 5, 7, 8, 14, 17, 18, 19]
-      mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      labels:
+        - 1
+        - 2
+        - 4
+        - 5
+        - 7
+        - 8
+        - 14
+        - 17
+        - 18
+        - 19
+      mapped_labels:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+        - 8
+        - 9
       train_samples_per_label: 2400
   task_order:
     - 0
     - 1
-
 model:
   architecture: paper_spyketorch
   time_steps: 15
@@ -72,26 +103,56 @@ model:
   weight_std: 0.05
   filter_threshold: 50.0
   local_normalization_radius: 8
-
 continual:
   neuron_partition:
     enabled: true
-    f_stable_percentile: 0.70
-    f_shared_percentile: 0.40
-    q_stable_min: 0.60
+    f_stable_percentile: 0.7
+    f_shared_percentile: 0.4
+    q_stable_min: 0.6
     importance:
       use_weight_strength: true
-
+  role_train:
+    enabled: true
+    apply_stages:
+      - task2
+    early_epoch_fraction: 0.8
+    early:
+      stable:
+        wta_open: false
+        stdp_lr: 0.0
+      shared:
+        wta_open: true
+        stdp_lr: 0.2
+      reserve:
+        wta_open: true
+        stdp_lr: 1.0
+    late:
+      stable:
+        wta_open: false
+        stdp_lr: 0.0
+      shared:
+        wta_open: true
+        stdp_lr: 0.1
+      reserve:
+        wta_open: true
+        stdp_lr: 0.5
+  task_memory:
+    enabled: true
+    eta: 0.1
+  sdpm_gate:
+    enabled: false
+  reserve_activation:
+    enabled: false
+  frozen_large_weights:
+    enabled: false
+  langevin:
+    enabled: false
 train:
-  # The source notebooks train one large tensor/DataLoader batch per epoch.
   batch_size: 24000
-  # C2/S3-input cache tensors are much larger than raw image samples; keep this smaller to avoid GPU OOM.
-  s3_cached_batch_size: 1024
+  s3_cached_batch_size: 4096
   num_workers: 0
   pin_memory: true
   learning_rule: paper_source_rstdp
-  # Paper-reported long run: MNIST initial training uses 600 epochs; subsequent
-  # EMNIST trains S1 for 2 epochs, S2 for 4 epochs, and S3 R-STDP for 100 epochs.
   num_epochs_task1: 600
   num_epochs_task2: 100
   s1_stdp_epochs_task1: 2
@@ -116,13 +177,15 @@ train:
   c2_feature_cache:
     enabled: true
     root_dir: data/features/c2
-    batch_size: 1024
-    # Keep the per-sample .pt cache in RAM across S3 epochs on high-memory servers.
+    batch_size: 4096
     preload: true
-    preload_pin_memory: false
+    preload_pin_memory: true
+    device_resident: true
+    direct_loader: true
     pin_memory: true
     num_workers: 0
 eval:
+  routing: natural
   batch_size: 1000
   pin_memory: true
   measure_forgetting: true
@@ -131,7 +194,9 @@ eval:
     task1_after_task1: initial_training_mnist
     task1_after_task2: subsequent_training_mnist
     task2_after_task2: subsequent_training_emnist
-
 output:
   root_dir: experiments
-  summary_csv: results/baseline_summary.csv
+  summary_csv: results/neurocomputing_summary.csv
+  save_task1_model: true
+  save_task2_model: true
+  save_subset_indices: true

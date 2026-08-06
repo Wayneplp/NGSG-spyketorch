@@ -1,0 +1,20 @@
+{
+  "run_name": "paper_full_partition_seed0",
+  "source": "server",
+  "config": "configs/ngsg/paper_full_partition_seed0.yaml",
+  "server_commit": "761d6f3",
+  "role_counts": {"stable": 60, "shared": 60, "reserve": 80, "dead": 0},
+  "metrics": {
+    "task1_after_task1": 0.9314,
+    "task1_after_task2": 0.4754,
+    "task2_after_task2": 0.75425,
+    "forgetting_pp": 45.6,
+    "avg_acc": 0.614825
+  },
+  "paper_reference": {
+    "task1_after_task1": 0.908,
+    "task1_after_task2": 0.481,
+    "task2_after_task2": 0.784
+  },
+  "note": "R0 catastrophic full; trainer.evaluate main table."
+}

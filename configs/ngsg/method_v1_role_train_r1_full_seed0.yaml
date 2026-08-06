@@ -1,18 +1,9 @@
-# Paper-source catastrophic forgetting baseline for
-# "Continuous Learning of Spiking Networks Trained with Local Rules".
-#
-# Protocol from the paper/Table 1:
-# 1. Initial training on MNIST digits.
-# 2. Subsequent training on EMNIST capital letters A, B, D, E, G, H, N, Q, R, S.
-# 3. MNIST data are not used during subsequent EMNIST training.
-# 4. Report initial MNIST, subsequent MNIST retention, and subsequent EMNIST.
-#
-# Current implementation: direct project port of the author's
-# dmitryanton68/continuous_learning MozafariMNIST2018 notebooks. It uses the
-# official SpykeTorch package and keeps the source conv/STDP/anti-STDP settings.
+# METHOD v1 R1: Role-train only (fair main-table comparison vs R0).
+# Training uses schedule WTA mask + S3 STDP lr scaling on Task2.
+# Inference remains natural WTA (same as catastrophic / continue paper).
 method: catastrophic
 seed: 0
-run_name: null
+run_name: method_v1_role_train_r1_full_seed0
 
 data:
   dataset_name: paper_mnist_emnist
@@ -24,6 +15,7 @@ data:
   subset_seed: 0
   preprocess_cache: true
   preprocess_cache_root: data/preprocessed/paper_source
+
 tasks:
   task_specs:
     - name: initial_mnist_digits
@@ -41,23 +33,19 @@ tasks:
         data_root: data/emnist
         normalize: false
         fix_orientation: true
-      # torchvision EMNIST letters are 1-indexed: A=1, B=2, D=4, E=5,
-      # G=7, H=8, N=14, Q=17, R=18, S=19. Map them onto 10 output groups.
       labels: [1, 2, 4, 5, 7, 8, 14, 17, 18, 19]
       mapped_labels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
       train_samples_per_label: 2400
-  task_order:
-    - 0
-    - 1
+  task_order: [0, 1]
 
 model:
   architecture: paper_spyketorch
   time_steps: 15
   num_classes: 10
   neurons_per_class: 20
+  s3_neurons: 200
   s1_maps: 30
   s2_maps: 250
-  s3_neurons: 200
   conv1_kernel: 5
   conv2_kernel: 3
   conv3_kernel: 5
@@ -81,17 +69,44 @@ continual:
     q_stable_min: 0.60
     importance:
       use_weight_strength: true
+  role_train:
+    enabled: true
+    apply_stages: [task2]
+    early_epoch_fraction: 0.8
+    early:
+      stable:
+        wta_open: false
+        stdp_lr: 0.0
+      shared:
+        wta_open: true
+        stdp_lr: 0.2
+      reserve:
+        wta_open: true
+        stdp_lr: 1.0
+    late:
+      stable:
+        wta_open: false
+        stdp_lr: 0.0
+      shared:
+        wta_open: true
+        stdp_lr: 0.1
+      reserve:
+        wta_open: true
+        stdp_lr: 0.5
+  task_memory:
+    enabled: true
+    eta: 0.1
+  sdpm_gate:
+    enabled: false
+  reserve_activation:
+    enabled: false
 
 train:
-  # The source notebooks train one large tensor/DataLoader batch per epoch.
   batch_size: 24000
-  # C2/S3-input cache tensors are much larger than raw image samples; keep this smaller to avoid GPU OOM.
   s3_cached_batch_size: 1024
   num_workers: 0
   pin_memory: true
   learning_rule: paper_source_rstdp
-  # Paper-reported long run: MNIST initial training uses 600 epochs; subsequent
-  # EMNIST trains S1 for 2 epochs, S2 for 4 epochs, and S3 R-STDP for 100 epochs.
   num_epochs_task1: 600
   num_epochs_task2: 100
   s1_stdp_epochs_task1: 2
@@ -117,12 +132,13 @@ train:
     enabled: true
     root_dir: data/features/c2
     batch_size: 1024
-    # Keep the per-sample .pt cache in RAM across S3 epochs on high-memory servers.
     preload: true
     preload_pin_memory: false
     pin_memory: true
     num_workers: 0
+
 eval:
+  routing: natural
   batch_size: 1000
   pin_memory: true
   measure_forgetting: true
@@ -134,4 +150,6 @@ eval:
 
 output:
   root_dir: experiments
-  summary_csv: results/baseline_summary.csv
+  summary_csv: results/method_v1_summary.csv
+  save_task1_model: true
+  save_task2_model: true

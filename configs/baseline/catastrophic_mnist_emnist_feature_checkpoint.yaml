@@ -1,18 +1,9 @@
-# Paper-source catastrophic forgetting baseline for
-# "Continuous Learning of Spiking Networks Trained with Local Rules".
-#
-# Protocol from the paper/Table 1:
-# 1. Initial training on MNIST digits.
-# 2. Subsequent training on EMNIST capital letters A, B, D, E, G, H, N, Q, R, S.
-# 3. MNIST data are not used during subsequent EMNIST training.
-# 4. Report initial MNIST, subsequent MNIST retention, and subsequent EMNIST.
-#
-# Current implementation: direct project port of the author's
-# dmitryanton68/continuous_learning MozafariMNIST2018 notebooks. It uses the
-# official SpykeTorch package and keeps the source conv/STDP/anti-STDP settings.
+# Feature-only run for building reusable S1/S2 checkpoints and C2 feature caches.
+# This config skips S3 R-STDP and evaluation through train.feature_only: true.
+# It keeps the paper-aligned S1=2 epoch and S2=4 epoch schedule.
 method: catastrophic
 seed: 0
-run_name: null
+run_name: paper_feature_checkpoint_full
 
 data:
   dataset_name: paper_mnist_emnist
@@ -73,15 +64,6 @@ model:
   filter_threshold: 50.0
   local_normalization_radius: 8
 
-continual:
-  neuron_partition:
-    enabled: true
-    f_stable_percentile: 0.70
-    f_shared_percentile: 0.40
-    q_stable_min: 0.60
-    importance:
-      use_weight_strength: true
-
 train:
   # The source notebooks train one large tensor/DataLoader batch per epoch.
   batch_size: 24000
@@ -90,6 +72,7 @@ train:
   num_workers: 0
   pin_memory: true
   learning_rule: paper_source_rstdp
+  feature_only: true
   # Paper-reported long run: MNIST initial training uses 600 epochs; subsequent
   # EMNIST trains S1 for 2 epochs, S2 for 4 epochs, and S3 R-STDP for 100 epochs.
   num_epochs_task1: 600
