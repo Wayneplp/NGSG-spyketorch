@@ -1,0 +1,236 @@
+# Auto-generated Neurocomputing formal matrix config
+# order=mnist_to_emnist method=langevin seed=4
+# See configs/neurocomputing/PROTOCOL.md
+method: langevin
+seed: 4
+run_name: neurocomputing_mnist_to_emnist_langevin_seed4_inhibition_r3_r1
+diagnostics:
+  six_diagnostics:
+    enabled: true
+    top_k: 10
+data:
+  dataset_name: paper_fixed_mnist_emnist
+  data_root: data
+  input_size: 28
+  input_channels: 1
+  num_classes: 10
+  normalize: false
+  subset_seed: 4
+  fixed_protocol: paper_langevin_source_assets
+  preprocess_cache: false
+  preprocess_cache_root: data/preprocessed/paper_source
+  preprocess_encode_batch_size: 128
+  preprocess_cache_pin_memory: true
+tasks:
+  task_specs:
+    -
+      name: mnist_digits
+      dataset:
+        dataset_name: paper_fixed
+        fixed_protocol: true
+        fixed_kind: spike_tensor
+        fixed_root: data/preprocessed
+        train_images_file: mnist_train_spikes.pt
+        train_labels_file: mnist_train_labels.pt
+        test_images_file: mnist_test_spikes.pt
+        test_labels_file: mnist_test_labels.pt
+        fixed_train_order_file: mnist_train_order_seed0.pt
+        fixed_test_order_file: mnist_test_order_seed0.pt
+        normalize: false
+      labels:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+        - 8
+        - 9
+      mapped_labels:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+        - 8
+        - 9
+      train_samples_per_label: 2400
+      test_samples_per_label: 400
+    -
+      name: emnist_capitals_ABDEGHNQRS
+      dataset:
+        dataset_name: paper_fixed
+        fixed_protocol: true
+        fixed_kind: spike_tensor
+        fixed_root: data/preprocessed
+        train_images_file: emnist_train_spikes.pt
+        train_labels_file: emnist_train_labels.pt
+        test_images_file: emnist_test_spikes.pt
+        test_labels_file: emnist_test_labels.pt
+        fixed_train_order_file: emnist_train_order_seed0.pt
+        fixed_test_order_file: emnist_test_order_seed0.pt
+        normalize: false
+      labels:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+        - 8
+        - 9
+      mapped_labels:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+        - 8
+        - 9
+      paper_class_names:
+        - A
+        - B
+        - D
+        - E
+        - G
+        - H
+        - N
+        - Q
+        - R
+        - S
+      train_samples_per_label: 2400
+      test_samples_per_label: 400
+  task_order:
+    - 0
+    - 1
+model:
+  architecture: paper_spyketorch
+  time_steps: 15
+  num_classes: 10
+  neurons_per_class: 20
+  s1_maps: 30
+  s2_maps: 250
+  s3_neurons: 200
+  conv1_kernel: 5
+  conv2_kernel: 3
+  conv3_kernel: 5
+  conv1_threshold: 15.0
+  conv2_threshold: 10.0
+  conv1_kwta: 5
+  conv2_kwta: 8
+  conv1_inhibition_radius: 3
+  conv2_inhibition_radius: 1
+  conv3_inhibition_radius: 0
+  weight_mean: 0.8
+  weight_std: 0.05
+  filter_threshold: 50.0
+  local_normalization_radius: 8
+continual:
+  neuron_partition:
+    enabled: true
+    f_stable_percentile: 0.7
+    f_shared_percentile: 0.4
+    q_stable_min: 0.6
+    importance:
+      use_weight_strength: true
+  role_train:
+    enabled: false
+  task_memory:
+    enabled: false
+  sdpm_gate:
+    enabled: false
+  reserve_activation:
+    enabled: false
+  frozen_large_weights:
+    enabled: false
+  langevin:
+    enabled: true
+    mode: official_brownian
+    epsilon: 0.0004
+    noise_std: 0.0004
+    research_epochs: 100
+    research_warmup_epochs: 1
+    research_sample_every: 100
+    research_min_accuracy: 0.8
+    research_stop_below_accuracy: true
+    research_adaptive_int: 0.5
+    research_loader:
+      batch_size: 1
+      shuffle: false
+      # Preserve strict per-sample/order semantics while prefetching CPU data.
+      num_workers: 4
+      persistent_workers: true
+      prefetch_factor: 4
+    apply_stages:
+      - research
+    weight_clip_min: 0.2
+    weight_clip_max: 0.8
+train:
+  batch_size: 24000
+  s3_cached_batch_size: 4096
+  num_workers: 0
+  pin_memory: true
+  learning_rule: paper_source_rstdp
+  num_epochs_task1: 50
+  num_epochs_task2: 100
+  s1_stdp_epochs_task1: 2
+  s2_stdp_epochs_task1: 4
+  s1_stdp_epochs_task2: 2
+  s2_stdp_epochs_task2: 4
+  paper_adaptive_int: 0.5
+  paper_adaptive_min: 0.0
+  reset_learning_rates_each_stage: true
+  progress_interval_samples: 2400
+  winner_frequency_log:
+    enabled: true
+    top_k: 10
+    include_counts: true
+  shuffle: false
+  paper_update_learning_rates: true
+  paper_update_learning_rates_research: false
+  evaluate_best_task2_checkpoint: false
+  feature_checkpoint:
+    enabled: true
+    root_dir: checkpoints/features/server_fresh_20260728_seed4
+    load: false
+    save: true
+    fallback_match: false
+  c2_feature_cache:
+    enabled: false
+    root_dir: data/features/c2
+    batch_size: 4096
+    preload: true
+    preload_pin_memory: true
+    device_resident: true
+    direct_loader: true
+    pin_memory: true
+    num_workers: 0
+  paper_adaptive_int_task1: 1.0
+  paper_adaptive_int_task2: 0.5
+  paper_adaptive_int_research: 0.5
+eval:
+  routing: natural
+  batch_size: 1000
+  pin_memory: true
+  measure_forgetting: true
+  save_intermediate_metrics: true
+  metric_names:
+    task1_after_task1: initial_training_mnist
+    task1_after_task2: subsequent_training_mnist
+    task2_after_task2: subsequent_training_emnist
+output:
+  root_dir: experiments
+  summary_csv: results/neurocomputing_summary.csv
+  save_task1_model: true
+  save_task2_model: true
+  save_subset_indices: true
