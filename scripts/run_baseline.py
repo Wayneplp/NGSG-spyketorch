@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
 from copy import deepcopy
 from dataclasses import dataclass
@@ -83,6 +84,18 @@ def parse_args() -> argparse.Namespace:
         choices=("auto", "cpu", "cuda"),
         default=None,
         help="Optional device override. Replaces train.device if provided.",
+    )
+    parser.add_argument(
+        "--torch-threads",
+        type=int,
+        default=None,
+        help="Limit intra-op CPU threads for this process (useful when sharing a server).",
+    )
+    parser.add_argument(
+        "--torch-interop-threads",
+        type=int,
+        default=None,
+        help="Limit PyTorch inter-op CPU threads for this process.",
     )
     parser.add_argument(
         "--dry-run",
@@ -335,6 +348,22 @@ def print_execution_plan(config: Mapping[str, Any], output_paths: Mapping[str, P
 
 def main() -> int:
     args = parse_args()
+    # Set these before constructing the trainer/model. This prevents two
+    # concurrent GPU jobs from each attempting to use all 40 host cores.
+    if args.torch_threads is not None:
+        if args.torch_threads < 1:
+            raise ValueError("--torch-threads must be positive")
+        os.environ["OMP_NUM_THREADS"] = str(args.torch_threads)
+        os.environ["MKL_NUM_THREADS"] = str(args.torch_threads)
+        import torch
+
+        torch.set_num_threads(args.torch_threads)
+    if args.torch_interop_threads is not None:
+        if args.torch_interop_threads < 1:
+            raise ValueError("--torch-interop-threads must be positive")
+        import torch
+
+        torch.set_num_interop_threads(args.torch_interop_threads)
     project_root = Path(__file__).resolve().parents[1]
     config_path = (project_root / args.config).resolve() if not Path(args.config).is_absolute() else Path(args.config)
 
