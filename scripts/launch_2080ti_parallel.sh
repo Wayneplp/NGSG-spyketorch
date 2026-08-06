@@ -10,13 +10,15 @@ cd "$ROOT"
 
 GPU_LANGEVIN="${GPU_LANGEVIN:-0}"
 GPU_FLW="${GPU_FLW:-1}"
+GPU_DIAG="${GPU_DIAG:-2}"
 LANGEVIN_CONFIG="${LANGEVIN_CONFIG:-configs/neurocomputing/neurocomputing_mnist_to_emnist_langevin_seed4_inhibition_r3_r1.yaml}"
 FLW_CONFIG="${FLW_CONFIG:-configs/baseline/frozen_paper_protocol.yaml}"
 LANGEVIN_RUN_NAME="${LANGEVIN_RUN_NAME:-langevin_2080ti_gpu${GPU_LANGEVIN}}"
 FLW_RUN_NAME="${FLW_RUN_NAME:-flw_2080ti_gpu${GPU_FLW}}"
 DIAG_RUN_DIR="${DIAG_RUN_DIR:-}"
 DIAG_SCRIPT="${DIAG_SCRIPT:-scripts/eval_partition_group_diagnosis.py}"
-DIAG_THREADS="${DIAG_THREADS:-32}"
+DIAG_DEVICE="${DIAG_DEVICE:-cuda}"
+DIAG_THREADS="${DIAG_THREADS:-8}"
 TRAIN_THREADS="${TRAIN_THREADS:-8}"
 INTEROP_THREADS="${INTEROP_THREADS:-1}"
 LOG_DIR="${LOG_DIR:-logs/parallel_2080ti}"
@@ -28,8 +30,8 @@ if [[ -z "$DIAG_RUN_DIR" ]]; then
   exit 2
 fi
 mkdir -p "$DIAG_RUN_DIR/diagnostics"
-if [[ "$GPU_LANGEVIN" == "$GPU_FLW" ]]; then
-  echo "GPU_LANGEVIN and GPU_FLW must be different." >&2
+if [[ "$GPU_LANGEVIN" == "$GPU_FLW" || "$GPU_LANGEVIN" == "$GPU_DIAG" || "$GPU_FLW" == "$GPU_DIAG" ]]; then
+  echo "GPU_LANGEVIN, GPU_FLW, and GPU_DIAG must be different." >&2
   exit 2
 fi
 for path in "$LANGEVIN_CONFIG" "$FLW_CONFIG" "$DIAG_SCRIPT"; do
@@ -58,21 +60,21 @@ CUDA_VISIBLE_DEVICES="$GPU_FLW" \
     >"$LOG_DIR/$FLW_RUN_NAME.log" 2>&1 &
 PID_FLW=$!
 
-echo "Launching CPU diagnostics on $DIAG_THREADS threads"
+echo "Launching diagnostics on physical GPU $GPU_DIAG ($DIAG_THREADS host threads)"
 (
-  OMP_NUM_THREADS="$DIAG_THREADS" MKL_NUM_THREADS="$DIAG_THREADS" \
+  CUDA_VISIBLE_DEVICES="$GPU_DIAG" OMP_NUM_THREADS="$DIAG_THREADS" MKL_NUM_THREADS="$DIAG_THREADS" \
     python "$DIAG_SCRIPT" \
       --run-dir "$DIAG_RUN_DIR" \
       --checkpoint-stage task2 \
       --test-task task2 \
-      --device cpu \
+      --device "$DIAG_DEVICE" \
       --write-json "$DIAG_RUN_DIR/diagnostics/parallel_task2_group_diagnosis.json"
-  OMP_NUM_THREADS="$DIAG_THREADS" MKL_NUM_THREADS="$DIAG_THREADS" \
+  CUDA_VISIBLE_DEVICES="$GPU_DIAG" OMP_NUM_THREADS="$DIAG_THREADS" MKL_NUM_THREADS="$DIAG_THREADS" \
     python "$DIAG_SCRIPT" \
       --run-dir "$DIAG_RUN_DIR" \
       --checkpoint-stage task2 \
       --test-task task1 \
-      --device cpu \
+      --device "$DIAG_DEVICE" \
       --write-json "$DIAG_RUN_DIR/diagnostics/parallel_task1_group_diagnosis_after_task2.json"
 ) >"$LOG_DIR/diagnostics_cpu.log" 2>&1 &
 PID_DIAG=$!
